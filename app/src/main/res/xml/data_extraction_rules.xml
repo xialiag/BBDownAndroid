@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+    <cloud-backup>
+        <!-- 云备份：所有 SharedPreferences（包含设置、Cookie、登录态等） -->
+        <include domain="sharedpref" path="." />
+        <include domain="database" path="." />
+    </cloud-backup>
+    <device-transfer>
+        <!-- 设备迁移：所有 SharedPreferences（确保换机/更新后设置不丢失） -->
+        <include domain="sharedpref" path="." />
+        <include domain="database" path="." />
+    </device-transfer>
+</data-extraction-rules>

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Background: Rounded square in macaron light pink -->
+    <path
+        android:fillColor="#FAD4E0"
+        android:pathData="M31.5,9 L76.5,9 Q99,9 99,31.5 L99,76.5 Q99,99 76.5,99 L31.5,99 Q9,99 9,76.5 L9,31.5 Q9,9 31.5,9 Z" />
+
+    <!-- Download arrow (white, solid filled) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M52,28.5 L56,28.5 Q58.5,28.5 58.5,31 L58.5,48.5 Q58.5,51 60.27,49.23 L63.48,46.02 Q65.25,44.25 67.02,46.02 L70.23,49.23 Q72,51 70.23,52.77 L55.77,67.23 Q54,69 52.23,67.23 L37.77,52.77 Q36,51 37.77,49.23 L40.98,46.02 Q42.75,44.25 44.52,46.02 L47.73,49.23 Q49.5,51 49.5,48.5 L49.5,31 Q49.5,28.5 52,28.5 Z" />
+
+    <!-- Base bar (white, solid filled) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M36,72.6 Q33.75,72.6 33.75,74.85 L33.75,79.35 Q33.75,81.6 36,81.6 L72,81.6 Q74.25,81.6 74.25,79.35 L74.25,74.85 Q74.25,72.6 72,72.6 Z" />
+
+</vector>

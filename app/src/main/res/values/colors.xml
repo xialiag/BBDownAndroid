@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg_dark">#1a1a1e</color>
+    <color name="accent_pink">#FB7299</color>
+    <color name="white">#ffffff</color>
+    <color name="ic_launcher_bg">#FAD4E0</color>
+    <color name="ic_launcher_fg">#FFFFFF</color>
+    <color name="macaron_pink">#FAD4E0</color>
+    <color name="rose_pink">#FB7299</color>
+    <color name="deep_rose">#D45D7E</color>
+</resources>

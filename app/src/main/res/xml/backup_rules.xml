@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- 备份所有 SharedPreferences（包含设置、Cookie、登录态等） -->
+    <include domain="sharedpref" path="." />
+    <!-- 备份数据库 -->
+    <include domain="database" path="." />
+</full-backup-content>

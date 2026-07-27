@@ -1,0 +1,32 @@
+# Gradle
+.gradle/
+build/
+
+# Local configuration
+local.properties
+
+# Signing
+*.keystore
+*.jks
+
+# FFmpegKit AAR (binary, too large for git, see ENVIRONMENT_SETUP.md)
+app/libs/*.aar
+
+# APK output
+*.apk
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+
+# Logs
+*.log
+logs/
+crash_*.txt
+
+# Temporary files
+*.tmp
+*.dl
+*.vpart
+*.apart

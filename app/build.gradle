@@ -1,0 +1,179 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+// ==================== FFmpeg 版本选择（编译时） ====================
+// 通过 Gradle 属性选择 FFmpeg 版本：
+//   ./gradlew assembleRelease -PffmpegVersion=6   # FFmpeg 6.x（默认，稳定版）
+//   ./gradlew assembleRelease -PffmpegVersion=8   # FFmpeg 8.x（最新版）
+//
+// AAR 文件查找顺序：
+//   1. libs/ffmpeg-kit-full-v{N}.aar  → 指定版本的 AAR
+//   2. libs/ffmpeg-kit-full.aar       → 向后兼容（视为 v6）
+//
+// 构建产物中通过 BuildConfig.FFMPEG_VERSION 暴露版本号，供运行时检测。
+def ffmpegVersion = project.findProperty('ffmpegVersion') ?: '6'
+def versionedAar = file("libs/ffmpeg-kit-full-v${ffmpegVersion}.aar")
+def ffmpegAarFile = versionedAar.exists() ? versionedAar : file('libs/ffmpeg-kit-full.aar')
+logger.lifecycle(">>> FFmpeg 版本: v${ffmpegVersion} | AAR: ${ffmpegAarFile.name} <<<")
+
+android {
+    namespace 'com.bbdown.app'
+    compileSdk 33
+    buildToolsVersion "34.0.0"
+
+    signingConfigs {
+        release {
+            storeFile file('../bbdown-release.keystore')
+            storePassword 'bbdown123'
+            keyAlias 'bbdown'
+            keyPassword 'bbdown123'
+            // 显式启用 v1 + v2 签名：AGP 7.x 在 minSdk>=24 时默认关闭 v1，
+            // 此处强制开启 v1(JAR) + v2(APK Signature Scheme v2)，保证旧设备兼容与覆盖安装。
+            v1SigningEnabled true
+            v2SigningEnabled true
+        }
+    }
+
+    defaultConfig {
+        applicationId "com.bbdown.app"
+        minSdk 24
+        targetSdk 33
+        versionCode 106
+        versionName "1.9.90"
+        vectorDrawables.useSupportLibrary = true
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+        // 将 FFmpeg 版本号注入 BuildConfig，供 Kotlin 运行时读取
+        buildConfigField "String", "FFMPEG_VERSION", "\"${ffmpegVersion}\""
+        // 将 AAR 路径也注入，便于调试
+        buildConfigField "String", "FFMPEG_AAR_NAME", "\"${ffmpegAarFile.name}\""
+    }
+
+    buildTypes {
+        debug {
+            minifyEnabled false
+            // 使用 release 签名，确保更新时数据不丢失（签名一致才能覆盖安装）
+            signingConfig signingConfigs.release
+        }
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+    kotlinOptions {
+        jvmTarget = '11'
+    }
+    sourceSets {
+        main {
+            assets.srcDirs = ['src/main/assets']
+        }
+    }
+}
+
+dependencies {
+    implementation 'androidx.core:core-ktx:1.9.0'
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'com.google.android.material:material:1.8.0'
+    implementation 'androidx.webkit:webkit:1.6.1'
+    implementation 'com.google.zxing:core:3.5.2'
+    // FFmpegKit AAR：由上方 ffmpegVersion 逻辑动态选择 v6 或 v8
+    implementation files(ffmpegAarFile)
+}
+
+// ==================== v1+v2 签名修复 ====================
+// AGP 7.x 在 minSdk>=24 时自动跳过 v1(JAR) 签名，仅使用 v2。
+// 此任务在 assembleDebug/assembleRelease 完成后，使用 jarsigner 补充 v1 签名，
+// 再用 apksigner --append-signature 追加 v2，实现 v1+v2 双签名。
+def sdkDir = android.sdkDirectory
+def buildToolsDir = new File(sdkDir, "build-tools/${android.buildToolsVersion}")
+def apksigner = new File(buildToolsDir, "apksigner")
+def keystoreFile = file('../bbdown-release.keystore')
+
+def signV1V2 = { apkFile ->
+    if (!apkFile.exists()) {
+        logger.warn("signV1V2: APK not found: ${apkFile}")
+        return
+    }
+    logger.lifecycle("signV1V2: Re-signing ${apkFile.name} with v1+v2...")
+
+    def zipalign = new File(buildToolsDir, "zipalign")
+
+    // 1. 删除 AGP 生成的签名产物：META-INF 下的 v1(JAR) 文件。
+    //    v2/v3 签名块位于中央目录前（非 META-INF），由后续 apksigner sign 整体替换。
+    exec {
+        commandLine 'zip', '-d', apkFile.absolutePath,
+                'META-INF/MANIFEST.MF', 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA'
+        ignoreExitValue = true  // 某些 pattern 可能不存在
+    }
+
+    // 2. zipalign：v1(JAR) 签名要求条目 4 字节对齐；
+    //    -p 同时保证 .so 页对齐（extractNativeLibs=false 所需），必须在签名前完成。
+    def alignedApk = new File(apkFile.parentFile, apkFile.name + '.aligned')
+    exec {
+        commandLine zipalign.absolutePath, '-f', '-p', '4',
+                apkFile.absolutePath, alignedApk.absolutePath
+    }
+    // 用对齐后的文件替换原文件
+    alignedApk.renameTo(apkFile)
+
+    // 3. apksigner 一次性签名 v1+v2（替换残留的 v2 块），不再用 jarsigner+append。
+    //    官方推荐做法：一次写入即可保证 v1+v2 同时有效且互不破坏（旧方案 jarsigner 做 v1
+    //    后 apksigner --append-signature --v1-signing-enabled false，会导致最终 v1 验证失败）。
+    exec {
+        commandLine apksigner.absolutePath, 'sign',
+                '--ks', keystoreFile.absolutePath,
+                '--ks-pass', 'pass:bbdown123',
+                '--ks-key-alias', 'bbdown',
+                '--key-pass', 'pass:bbdown123',
+                '--v1-signing-enabled', 'true',
+                '--v2-signing-enabled', 'true',
+                '--v3-signing-enabled', 'false',
+                '--v4-signing-enabled', 'false',
+                '--min-sdk-version', '24',
+                apkFile.absolutePath
+    }
+
+    // 4. 验证签名 + 对齐
+    //    注意：verify 的 --min-sdk-version 必须用 21（而非 24）。在 API 24+ 时
+    //    apksigner 不再走 v1 验证，会报 "v1 scheme: false"，但 v1 签名实际存在。
+    //    用 21 才能正确反映 v1+v2 双签名的有效性。
+    exec {
+        commandLine apksigner.absolutePath, 'verify', '--verbose', '--min-sdk-version', '21',
+                apkFile.absolutePath
+    }
+    exec {
+        commandLine zipalign.absolutePath, '-c', '-p', '4', apkFile.absolutePath
+    }
+    logger.lifecycle("signV1V2: ${apkFile.name} signed with v1+v2, zipalign verified ✓")
+}
+
+// 在 assembleDebug 和 assembleRelease 后自动执行 v1+v2 重签名
+android.applicationVariants.all { variant ->
+    variant.outputs.each { output ->
+        // 在 APK 文件名中加入 FFmpeg 版本标识，如 BBDown-1.9.90-ff6-release.apk
+        def versionLabel = "ff${ffmpegVersion}"
+        output.outputFileName = output.outputFileName.replace('.apk', "-${versionLabel}.apk")
+        
+        def apkFile = output.outputFile
+        def taskName = "signV1V2${variant.name.capitalize()}"
+        tasks.register(taskName) {
+            group = 'signing'
+            description = "Re-sign ${variant.name} APK with v1+v2 signature schemes (FFmpeg v${ffmpegVersion})"
+            doLast {
+                signV1V2(apkFile)
+            }
+        }
+        // 依赖关系：assemble 完成后自动执行
+        tasks.named("assemble${variant.name.capitalize()}").configure {
+            finalizedBy(taskName)
+        }
+    }
+}
