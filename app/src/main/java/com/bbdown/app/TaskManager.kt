@@ -58,9 +58,14 @@ object TaskManager {
 
     fun get(id: String): DownloadTask? = tasks[id]
 
-    /** 初始化上下文（应用启动时调用），注册系统内存回调 */
+    /** 初始化上下文（应用启动时调用），注册系统内存回调 + 申请堆内存增长 */
     fun init(context: Context) {
         appContext = context.applicationContext
+
+        // 启动时打印堆内存限制，并尝试申请增长
+        logHeapLimits("init")
+        requestHeapGrowth("init")
+
         // 注册系统内存压力回调，实时响应 onTrimMemory
         try {
             context.applicationContext.registerComponentCallbacks(object : ComponentCallbacks2 {
@@ -75,15 +80,49 @@ object TaskManager {
                     if (memPressureLevel >= 2) {
                         Logger.w("TaskManager", "系统内存压力回调: level=$level, 调整等级=$memPressureLevel")
                         System.gc()
+                        // 内存紧张时尝试申请堆增长
+                        requestHeapGrowth("onTrimMemory($level)")
                     }
                 }
                 override fun onConfigurationChanged(newConfig: Configuration) {}
                 override fun onLowMemory() {
                     memPressureLevel = 4
-                    Logger.w("TaskManager", "系统低内存回调，强制GC")
+                    Logger.w("TaskManager", "系统低内存回调，强制GC + 申请堆增长")
                     System.gc()
+                    requestHeapGrowth("onLowMemory")
                 }
             })
+        } catch (_: Exception) {}
+    }
+
+    /**
+     * 通过 VMRuntime 申请 JVM 堆内存增长。
+     * Android 的堆上限在启动时确定，但 VMRuntime.requestHeapGrowth() 可以
+     * 向系统申请扩大上限（需要 largeHeap=true 配合）。
+     * 通过反射调用隐藏 API，兼容所有 Android 版本。
+     */
+    private fun requestHeapGrowth(reason: String) {
+        try {
+            val vmRuntimeClass = Class.forName("dalvik.system.VMRuntime")
+            val getRuntime = vmRuntimeClass.getMethod("getRuntime")
+            val vmRuntime = getRuntime.invoke(null)
+            val requestGrowth = vmRuntimeClass.getMethod("requestHeapGrowth")
+            requestGrowth.invoke(vmRuntime)
+            Logger.d("TaskManager", "[$reason] 已申请堆内存增长")
+        } catch (_: Exception) {
+            // 部分 ROM/Android 版本可能不支持此 API，静默忽略
+        }
+    }
+
+    /** 打印当前 JVM 堆内存限制 */
+    private fun logHeapLimits(reason: String) {
+        try {
+            val rt = Runtime.getRuntime()
+            val maxMB = rt.maxMemory() / (1024 * 1024)
+            val totalMB = rt.totalMemory() / (1024 * 1024)
+            val freeMB = rt.freeMemory() / (1024 * 1024)
+            val usedMB = totalMB - freeMB
+            Logger.i("TaskManager", "[$reason] 堆内存: 已用=${usedMB}MB, 已分配=${totalMB}MB, 上限=${maxMB}MB")
         } catch (_: Exception) {}
     }
 
@@ -131,12 +170,14 @@ object TaskManager {
                 DownloadEngine.execute(task, outputDir, effectiveThreads)
             } catch (e: OutOfMemoryError) {
                 Logger.e("TaskManager", "OOM(内存不足)导致任务失败: ${task.title}", e)
+                // OOM 后先 GC + 申请堆增长，争取更多内存
+                System.gc()
+                requestHeapGrowth("OOM")
+                logHeapLimits("OOM")
                 if (task.status != DownloadTask.STATUS_CANCELED) {
                     task.status = DownloadTask.STATUS_FAILED
                     task.errorMsg = "内存不足(OOM)，请减少批量下载数量"
                 }
-                // 强制 GC 释放内存
-                System.gc()
             } catch (e: Throwable) {
                 Logger.e("TaskManager", "任务执行异常(已隔离): ${task.title}", e)
                 if (task.status != DownloadTask.STATUS_CANCELED) {
