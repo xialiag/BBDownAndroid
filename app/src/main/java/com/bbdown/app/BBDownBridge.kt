@@ -1243,39 +1243,16 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
                         epid = p.optString("epid"), title = p.optString("title"), duration = p.optInt("duration")
                     ))
                 }
-                val url = j.optString("url")
-                val title = j.optString("title")
-
-                // 获取实际可用流并让用户选择
-                var selectedVideoId = j.optString("videoId", "80")
-                var selectedAudioId = j.optString("preferAudio", "m4a")
-                try {
-                    if (pages.isNotEmpty()) {
-                        val p = pages[0]
-                        val epid = if (p.epid.isNotEmpty()) p.epid else ""
-                        val play = BilibiliApi.getPlayInfo(p.aid, p.cid, epid, false, "127")
-                        if (play.videos.isNotEmpty() || play.audios.isNotEmpty()) {
-                            val result = showStreamPickerDialog(play, title)
-                            if (result != null) {
-                                selectedVideoId = result.first
-                                selectedAudioId = result.second
-                            }
-                        }
-                    }
-                } catch (e: Exception) {
-                    Logger.w("Bridge", "获取流信息失败，使用默认选择: ${e.message}")
-                }
-
                 val taskId = "t_" + System.currentTimeMillis() + "_" + UUID.randomUUID().toString().take(6)
                 val task = DownloadTask(
                     taskId = taskId,
-                    url = url,
-                    title = title,
+                    url = j.optString("url"),
+                    title = j.optString("title"),
                     pic = j.optString("pic"),
                     pages = pages,
-                    videoId = selectedVideoId,
+                    videoId = j.optString("videoId", "80"),
                     preferCodec = j.optString("preferCodec", "avc"),
-                    preferAudio = selectedAudioId,
+                    preferAudio = j.optString("preferAudio", "m4a"),
                     cookie = Http.cookie,
                     downloadMode = j.optString("downloadMode", "all"),
                     downloadDanmaku = j.optBoolean("downloadDanmaku", false),
