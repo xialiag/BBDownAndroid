@@ -86,6 +86,10 @@ dependencies {
     implementation 'com.google.zxing:core:3.5.2'
     // FFmpegKit AAR：由上方 ffmpegVersion 逻辑动态选择 v6 或 v8
     implementation files(ffmpegAarFile)
+    // FFmpegKit 的传递依赖：implementation files(aar) 不会解析 AAR 的传递依赖，
+    // FFmpegKitConfig.<clinit> 引用了 com.arthenica.smartexception.java.Exceptions，
+    // 缺失会在运行时抛 NoClassDefFoundError（启动即闪退），需显式声明。
+    implementation 'com.arthenica:smart-exception-java:0.2.1'
 }
 
 // ==================== v1+v2 签名修复 ====================
@@ -98,6 +102,15 @@ def apksigner = new File(buildToolsDir, "apksigner")
 def keystoreFile = file('../bbdown-release.keystore')
 
 def signV1V2 = { apkFile ->
+    // --- Windows 开发环境：跳过自定义 v1+v2 重签名 ---
+    // AGP 的 release signingConfig 已开启 v1+v2 且自带 zipalign，产物可直接安装；
+    // 原任务依赖裸 zip/apksigner/zipalign（无扩展名），Windows 下 CreateProcess 失败。
+    // 该任务 finalizedBy assemble，失败会拖垮整个构建，故在 Windows 优雅跳过。
+    // Linux/macOS 行为保持不变。
+    if (org.gradle.internal.os.OperatingSystem.current().isWindows()) {
+        logger.lifecycle("signV1V2: 检测到 Windows，跳过自定义 v1+v2 重签名。APK 维持 AGP 签名: ${apkFile}")
+        return
+    }
     if (!apkFile.exists()) {
         logger.warn("signV1V2: APK not found: ${apkFile}")
         return

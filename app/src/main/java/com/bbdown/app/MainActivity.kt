@@ -46,6 +46,10 @@ class MainActivity : AppCompatActivity() {
         // 安装全局崩溃捕获器（第一时间安装，确保后续异常都能被记录）
         CrashHandler.install(this)
 
+        // 初始化 Native 崩溃检测器：捕获 Java 无法捕获的 native 信号崩溃（如 FFmpegKit SIGSEGV），
+        // 通过崩溃标记文件 + FFmpegKit 日志回调 + Signal 处理器三层机制记录崩溃上下文。
+        NativeCrashDetector.init(this)
+
         WindowCompat.setDecorFitsSystemWindows(window, true)
         window.statusBarColor = Color.parseColor("#FB7299")
         WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightStatusBars = false

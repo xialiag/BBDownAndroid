@@ -39,7 +39,9 @@ object FFmpegVersion {
     val runtimeVersionString: String by lazy {
         try {
             FFmpegKitConfig.getFFmpegVersion()
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
+            // 用 Throwable 而非 Exception：NoClassDefFoundError 是 Error 子类，
+            // 若 smart-exception-java 依赖缺失时仍能优雅降级，不致启动闪退。
             "unknown"
         }
     }
@@ -48,7 +50,7 @@ object FFmpegVersion {
     val kitVersionString: String by lazy {
         try {
             FFmpegKitConfig.getVersion()
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             "unknown"
         }
     }

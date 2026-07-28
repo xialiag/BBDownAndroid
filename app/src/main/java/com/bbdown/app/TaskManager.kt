@@ -89,7 +89,7 @@ object TaskManager {
                     Logger.i("TaskManager", "任务已暂停，跳过执行: ${task.title}")
                     return@execute
                 }
-                Logger.i("TaskManager", "开始执行任务[seq=${task.seq}]: ${task.title}")
+                Logger.i("TaskManager", "开始执行任务[seq=${task.seq}](thread=${Thread.currentThread().name}): ${task.title}")
                 // 内存压力检测：可用内存不足时降低线程数
                 val effectiveThreads = getEffectiveThreads()
                 if (effectiveThreads != threads) {
@@ -192,7 +192,7 @@ object TaskManager {
                     Logger.i("TaskManager", "恢复任务已取消，跳过执行: ${task.title}")
                     return@execute
                 }
-                Logger.i("TaskManager", "恢复暂停任务: ${task.title}")
+                Logger.i("TaskManager", "恢复暂停任务(thread=${Thread.currentThread().name}): ${task.title}")
                 val effectiveThreads = getEffectiveThreads()
                 DownloadEngine.execute(task, outputDir, effectiveThreads)
             } catch (e: OutOfMemoryError) {
@@ -300,7 +300,7 @@ object TaskManager {
                     Logger.i("TaskManager", "续传任务已取消，跳过执行: ${task.title}")
                     return@execute
                 }
-                Logger.i("TaskManager", "开始执行续传任务[seq=${task.seq}]: ${task.title}")
+                Logger.i("TaskManager", "开始执行续传任务[seq=${task.seq}](thread=${Thread.currentThread().name}): ${task.title}")
                 val effectiveThreads = getEffectiveThreads()
                 DownloadEngine.execute(task, outputDir, effectiveThreads)
             } catch (e: OutOfMemoryError) {

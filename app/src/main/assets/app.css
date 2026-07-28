@@ -745,11 +745,12 @@ input::placeholder,textarea::placeholder{color:var(--fg-dim);opacity:.6}
 /* ===== 崩溃日志项 ===== */
 .crash-log-item{background:var(--card-bg);border:1px solid var(--card-border);border-radius:10px;
   margin-bottom:8px;overflow:hidden}
-.cli-header{display:flex;align-items:center;gap:10px;padding:12px 14px;cursor:pointer;
+.cli-header{display:flex;align-items:center;gap:6px;padding:12px 14px;cursor:pointer;
   transition:background var(--dur-fast) var(--ease-out)}
 .cli-header:active{background:var(--bg-hover)}
-.cli-title{font-size:12px;font-weight:600;color:var(--fg-bright);flex:0 0 auto}
-.cli-meta{font-size:11px;color:var(--fg-dim);flex:1 1 auto}
+.cli-title{font-size:12px;font-weight:600;color:var(--fg-bright);
+  flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.cli-meta{font-size:11px;color:var(--fg-dim);flex:0 0 auto;white-space:nowrap}
 .cli-toggle{font-size:10px;color:var(--fg-dim);transition:transform var(--dur-fast) var(--ease-out)}
 .cli-share{font-size:10px;font-weight:500;color:var(--accent);background:none;border:1px solid var(--accent);
   border-radius:4px;padding:2px 8px;cursor:pointer;flex:0 0 auto;

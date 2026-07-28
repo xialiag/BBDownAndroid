@@ -1,5 +1,6 @@
 package com.bbdown.app.core
 
+import android.os.Debug
 import java.io.File
 
 /**
@@ -37,6 +38,26 @@ object DownloadEngine {
                 File(outputDir, sanitize(task.collectionTitle)).apply { mkdirs() }
             } else {
                 outputDir.apply { mkdirs() }
+            }
+
+            // 元数据补全（修复5）：合集下载时前端可能未传 upperName/desc/pubTime（字段名不匹配
+            // 或 downloadCollection 仅传 url/title/pic/pages），此处通过 getVideoInfo 自动补全，
+            // 确保混流/注入时元数据完整。仅当 upperName 为空时才请求，避免额外 API 开销。
+            var effectiveUpperName = task.upperName
+            var effectiveDesc = task.desc
+            var effectivePubTime = task.pubTime
+            if (effectiveUpperName.isEmpty() && task.url.isNotEmpty()) {
+                try {
+                    Logger.i("DownloadEngine", "upperName 为空，通过 getVideoInfo 补全元数据: ${task.url}")
+                    val parsed = BilibiliApi.parseUrl(task.url)
+                    val info = BilibiliApi.getVideoInfo(parsed)
+                    if (info.upperName.isNotEmpty()) effectiveUpperName = info.upperName
+                    if (effectiveDesc.isEmpty()) effectiveDesc = info.desc
+                    if (effectivePubTime == 0L) effectivePubTime = info.pubTime
+                    Logger.i("DownloadEngine", "元数据补全: upperName=${effectiveUpperName}, pubTime=${effectivePubTime}")
+                } catch (e: Exception) {
+                    Logger.w("DownloadEngine", "元数据补全失败(不影响下载): ${e.message}")
+                }
             }
 
             for ((pageIdx, page) in task.pages.withIndex()) {
@@ -205,13 +226,14 @@ object DownloadEngine {
                                 subTracks = downloadSubtitles(task, effectivePage, workDir, task.skipAi)
                             }
                             // 混流并写入元数据+封面+字幕（参考原版 BBDown 的 MuxAV）
+                            checkMemoryBeforeMux()
                             val ok = FFmpegMuxer.muxWithMetadata(
                                 vFile, aFile, outFile,
                                 title = if (totalPages > 1) page.title else task.title,
                                 album = if (totalPages > 1) task.title else "",
-                                artist = task.upperName,
-                                desc = task.desc,
-                                pubTime = task.pubTime,
+                                artist = effectiveUpperName,
+                                desc = effectiveDesc,
+                                pubTime = effectivePubTime,
                                 coverFile = coverFile,
                                 subtitles = subTracks
                             )
@@ -268,10 +290,11 @@ object DownloadEngine {
                             if (vFile != null && vFile.exists() && vFile.name.endsWith(".mp4")) {
                                 task.status = DownloadTask.STATUS_MUXING
                                 try {
+                                    checkMemoryBeforeMux()
                                     videoMetaInjected = FFmpegMuxer.injectMetadataOnly(
                                         vFile, title = metaTitle, album = metaAlbum,
-                                        artist = task.upperName, desc = task.desc,
-                                        pubTime = task.pubTime,
+                                        artist = effectiveUpperName, desc = effectiveDesc,
+                                        pubTime = effectivePubTime,
                                         coverFile = coverFile,
                                         subtitles = subTracks
                                     )
@@ -286,10 +309,11 @@ object DownloadEngine {
                             if (aFileNN != null && aFileNN.exists() && aFileNN.name.endsWith(".m4a")) {
                                 task.status = DownloadTask.STATUS_MUXING
                                 try {
+                                    checkMemoryBeforeMux()
                                     audioMetaInjected = FFmpegMuxer.injectMetadataOnly(
                                         aFileNN, title = metaTitle, album = metaAlbum,
-                                        artist = task.upperName, desc = task.desc,
-                                        pubTime = task.pubTime,
+                                        artist = effectiveUpperName, desc = effectiveDesc,
+                                        pubTime = effectivePubTime,
                                         coverFile = coverFile,
                                         subtitles = subTracks
                                     )
@@ -502,5 +526,23 @@ object DownloadEngine {
 
     fun sanitize(name: String): String {
         return name.replace(Regex("[\\\\/:*?\"<>|]"), "_").trim().ifEmpty { "video" }
+    }
+
+    /**
+     * 混流/元数据注入前检查 JVM 堆和 native 堆空闲内存，不足时主动触发 GC（修复4）。
+     * FFmpegKit 在 native 层执行时需要额外内存（通常为输入文件大小的 1-2 倍），
+     * 内存不足会直接触发 SIGSEGV（无法被 Java UncaughtExceptionHandler 捕获）。
+     */
+    private fun checkMemoryBeforeMux() {
+        try {
+            val runtime = Runtime.getRuntime()
+            val jvmFreeMB = (runtime.maxMemory() - runtime.totalMemory() + runtime.freeMemory()) / (1024 * 1024)
+            val nativeFreeMB = Debug.getNativeHeapFreeSize() / (1024 * 1024)
+            if (jvmFreeMB < 32 || nativeFreeMB < 8) {
+                Logger.w("DownloadEngine", "混流前内存偏低: JVM空闲=${jvmFreeMB}MB, Native空闲=${nativeFreeMB}MB, 触发GC")
+                System.gc()
+                try { Thread.sleep(100) } catch (_: InterruptedException) {}
+            }
+        } catch (_: Exception) {}
     }
 }

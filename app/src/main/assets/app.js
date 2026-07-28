@@ -1466,9 +1466,10 @@ async function doBatchDownload(){
     collectionTitle: state._batchCollectionTitle || '',
     delayPerPage: state.delayPerPage || 0,
     isCheese: r.isCheese || false,
-    upperName: r.upperName || '',
+    // 字段名回退（修复5）：合集视频卡片用 ownerName/pubdate，普通解析用 upperName/pubTime
+    upperName: r.upperName || r.ownerName || '',
     desc: r.desc || '',
-    pubTime: r.pubTime || 0,
+    pubTime: r.pubTime || r.pubdate || 0,
     bvid: r.bvid || '',
     ownerMid: r.ownerMid || '',
   }));
@@ -2894,6 +2895,12 @@ async function downloadCollection(){
         title: m.title || m.bvid,
         pic: m.pic || '',
         pages: [{index:1, aid:m.aid, cid:m.cid, epid:'', title:m.title||'', duration:m.duration||0}],
+        // 元数据字段（修复5）：从 CollectionVideoMeta 映射到任务字段
+        upperName: m.ownerName || '',
+        desc: m.desc || '',
+        pubTime: m.pubdate || 0,
+        bvid: m.bvid || '',
+        ownerMid: m.ownerMid || '',
       }));
       applyDefaultSettings();
       const tasksWithOpts = tasks.map(t=>({
@@ -2981,7 +2988,21 @@ async function showCollectionSelection(){
         title: m.title || m.bvid,
         pic: m.pic || '',
         ok: true,
-        pages: m.aid ? [{index:1, aid:m.aid, cid:m.cid||'', title:m.title||'', duration:m.duration||0}] : []
+        pages: m.aid ? [{index:1, aid:m.aid, cid:m.cid||'', title:m.title||'', duration:m.duration||0}] : [],
+        // 补全全部字段（修复2）：使合集视频卡片与其他页面统一，使用同一个 videoCardHTML
+        duration: m.duration || 0,
+        pubdate: m.pubdate || 0,
+        ownerName: m.ownerName || '',
+        upperName: m.ownerName || '',   // 别名，供 doBatchDownload 字段回退使用
+        pubTime: m.pubdate || 0,         // 别名
+        ownerFace: m.ownerFace || '',
+        ownerMid: m.ownerMid || '',
+        play: m.play || 0,
+        danmaku: m.danmaku || 0,
+        officialType: m.officialType ?? -1,
+        vipType: m.vipType || 0,
+        vipStatus: m.vipStatus || 0,
+        desc: m.desc || '',
       }));
     } else {
       // 元数据不完整（如 series 类型仅有 bvid），直接使用已有数据
@@ -2992,7 +3013,21 @@ async function showCollectionSelection(){
           return {
             url: bv, bvid: bv, title: meta.title, pic: meta.pic||'',
             ok: true,
-            pages: meta.aid ? [{index:1, aid:meta.aid, cid:meta.cid||'', title:meta.title, duration:meta.duration||0}] : []
+            pages: meta.aid ? [{index:1, aid:meta.aid, cid:meta.cid||'', title:meta.title, duration:meta.duration||0}] : [],
+            // 补全全部字段（修复2）：使合集视频卡片与其他页面统一
+            duration: meta.duration || 0,
+            pubdate: meta.pubdate || 0,
+            ownerName: meta.ownerName || '',
+            upperName: meta.ownerName || '',
+            pubTime: meta.pubdate || 0,
+            ownerFace: meta.ownerFace || '',
+            ownerMid: meta.ownerMid || '',
+            play: meta.play || 0,
+            danmaku: meta.danmaku || 0,
+            officialType: meta.officialType ?? -1,
+            vipType: meta.vipType || 0,
+            vipStatus: meta.vipStatus || 0,
+            desc: meta.desc || '',
           };
         }
         // 仅有 bvid，无标题信息，显示 bvid 作为标题

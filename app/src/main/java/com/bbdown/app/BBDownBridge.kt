@@ -270,8 +270,9 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
         executor.execute {
             try {
                 val logDir = File(context.getExternalFilesDir(null), "logs")
-                val crashFiles = logDir.listFiles { f -> f.name.startsWith("crash_") }
-                    ?.sortedByDescending { it.lastModified() } ?: emptyList()
+                val crashFiles = logDir.listFiles { f ->
+                    f.name.startsWith("crash_") || f.name.startsWith("native_crash_") || f.name.startsWith("native_signal_")
+                }?.sortedByDescending { it.lastModified() } ?: emptyList()
                 val arr = JSONArray()
                 for (f in crashFiles) {
                     val j = JSONObject()
@@ -299,7 +300,9 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
         executor.execute {
             try {
                 val logDir = File(context.getExternalFilesDir(null), "logs")
-                val crashFiles = logDir.listFiles { f -> f.name.startsWith("crash_") } ?: emptyArray()
+                val crashFiles = logDir.listFiles { f ->
+                    f.name.startsWith("crash_") || f.name.startsWith("native_crash_") || f.name.startsWith("native_signal_")
+                } ?: emptyArray()
                 var deleted = 0
                 for (f in crashFiles) { if (f.delete()) deleted++ }
                 Logger.i("Bridge", "已删除 $deleted 个崩溃日志")
@@ -317,7 +320,7 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
             try {
                 val logDir = File(context.getExternalFilesDir(null), "logs")
                 val file = File(logDir, filename)
-                if (!file.exists() || !file.name.startsWith("crash_")) {
+                if (!file.exists() || !(file.name.startsWith("crash_") || file.name.startsWith("native_crash_") || file.name.startsWith("native_signal_"))) {
                     err(reqId, "日志文件不存在")
                     return@execute
                 }
@@ -337,7 +340,7 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
             try {
                 val logDir = File(context.getExternalFilesDir(null), "logs")
                 val file = File(logDir, filename)
-                if (!file.exists() || !file.name.startsWith("crash_")) {
+                if (!file.exists() || !(file.name.startsWith("crash_") || file.name.startsWith("native_crash_") || file.name.startsWith("native_signal_"))) {
                     err(reqId, "日志文件不存在")
                     return@execute
                 }
@@ -367,7 +370,9 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
         executor.execute {
             try {
                 val logDir = File(context.getExternalFilesDir(null), "logs")
-                val crashCount = logDir.listFiles { f -> f.name.startsWith("crash_") }?.size ?: 0
+                val crashCount = logDir.listFiles { f ->
+                    f.name.startsWith("crash_") || f.name.startsWith("native_crash_") || f.name.startsWith("native_signal_")
+                }?.size ?: 0
                 val debugCount = Logger.getCount()
                 ok(reqId, JSONObject().put("crashCount", crashCount).put("debugCount", debugCount))
             } catch (e: Exception) {
@@ -1189,7 +1194,7 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
                 if (logDir.exists()) {
                     logDir.listFiles()?.forEach { f ->
                         if (f.isFile) {
-                            if (f.name.startsWith("crash_")) {
+                            if (f.name.startsWith("crash_") || f.name.startsWith("native_crash_") || f.name.startsWith("native_signal_")) {
                                 crashLogSize += f.length(); crashLogCount++
                             } else {
                                 debugLogSize += f.length(); debugLogCount++
