@@ -37,6 +37,119 @@ class MainActivity : AppCompatActivity() {
         private const val REQ_STORAGE = 1001
         private const val REQ_MANAGE_STORAGE = 1002
         private const val BACK_PRESS_INTERVAL = 2000L
+
+        /** 注入 JS：拦截下载，先展示实际可用流让用户选择（原版 BBDown 风格） */
+        private const val STREAM_PICKER_JS = """
+(function(){
+  if(window._streamPickerInjected) return;
+  window._streamPickerInjected = true;
+  var _origAddTask = window.callBridge;
+  if(!_origAddTask) return;
+
+  window.callBridge = function(method){
+    var args = Array.prototype.slice.call(arguments);
+    if(method !== 'addTask' || args.length < 3) return _origAddTask.apply(this, args);
+    var reqId = args[1], taskJson = args[2];
+    try { var t = typeof taskJson === 'string' ? JSON.parse(taskJson) : taskJson; } catch(e) { return _origAddTask.apply(this, args); }
+    var url = t.url || '';
+    if(!url) return _origAddTask.apply(this, args);
+
+    // 异步获取流信息，展示选择器
+    var streamReqId = ++window._bseq;
+    window._bres[streamReqId] = {
+      resolve: function(data) { showStreamPicker(data, t, args, _origAddTask, this); },
+      reject: function(err) { toast('获取流信息失败: ' + err, 'err'); }
+    };
+    try { AndroidBridge.getAvailableStreams(streamReqId, url); } catch(e) { toast('获取流信息失败: ' + e, 'err'); }
+    return streamReqId;
+  };
+
+  function fmtSize(bytes) {
+    if(!bytes || bytes <= 0) return '';
+    if(bytes >= 1048576) return '~' + (bytes / 1048576).toFixed(2) + ' MB';
+    return '~' + (bytes / 1024).toFixed(1) + ' KB';
+  }
+
+  function showStreamPicker(data, task, origArgs, origFn, origCtx) {
+    var videos = data.videos || [];
+    var audios = data.audios || [];
+    if(!videos.length && !audios.length) { toast('无可用流','err'); return; }
+
+    // 移除已有选择器
+    var old = document.getElementById('sp-overlay');
+    if(old) old.remove();
+
+    // 构建选项列表（原版风格）
+    var vLines = videos.map(function(v, i) {
+      var parts = ['[' + (v.dfn||'') + ']'];
+      if(v.res) parts.push('[' + v.res + ']');
+      parts.push('[' + (v.codecs||'') + ']');
+      if(v.fps) parts.push('[' + v.fps + ']');
+      parts.push('[' + (v.bandwidth||0) + ' kbps]');
+      var sz = v.size ? v.size * (v.dur||0) / 8 : 0;
+      if(!sz && v.bandwidth && v.dur) sz = v.bandwidth * 1000 * v.dur / 8;
+      if(sz > 0) parts.push('[' + fmtSize(sz) + ']');
+      return { id: v.id, label: parts.join(' '), idx: i };
+    });
+
+    var aLines = audios.map(function(a, i) {
+      var parts = ['[' + (a.codecs||'') + ']'];
+      parts.push('[' + (a.bandwidth||0) + ' kbps]');
+      var sz = a.bandwidth && data.dur ? a.bandwidth * 1000 * data.dur / 8 : 0;
+      if(sz > 0) parts.push('[' + fmtSize(sz) + ']');
+      return { id: a.id, label: parts.join(' '), idx: i };
+    });
+
+    // 创建 overlay
+    var ov = document.createElement('div');
+    ov.id = 'sp-overlay';
+    ov.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:99999;display:flex;align-items:center;justify-content:center;overflow-y:auto;padding:20px 0';
+
+    var card = document.createElement('div');
+    card.style.cssText = 'background:var(--bg,#1a1a2e);border:1px solid var(--border,#333);border-radius:12px;padding:20px;max-width:420px;width:90%;max-height:85vh;overflow-y:auto;color:var(--fg,#e0e0e0)';
+
+    var html = '<div style="font-size:16px;font-weight:bold;margin-bottom:12px;text-align:center">选择流 - ' + escHtml(data.title||'') + '</div>';
+
+    if(vLines.length) {
+      html += '<div style="font-size:12px;color:var(--fg-dim,#888);margin:8px 0 4px">视频流 (' + vLines.length + '条)</div>';
+      html += '<select id="sp-video" style="width:100%;padding:8px;border-radius:6px;border:1px solid var(--border,#333);background:var(--bg2,#252540);color:var(--fg,#e0e0e0);font-size:13px;margin-bottom:12px">';
+      vLines.forEach(function(v) { html += '<option value="' + v.id + '">' + (v.idx+1) + '. ' + escHtml(v.label) + '</option>'; });
+      html += '</select>';
+    }
+
+    if(aLines.length) {
+      html += '<div style="font-size:12px;color:var(--fg-dim,#888);margin:8px 0 4px">音频流 (' + aLines.length + '条)</div>';
+      html += '<select id="sp-audio" style="width:100%;padding:8px;border-radius:6px;border:1px solid var(--border,#333);background:var(--bg2,#252540);color:var(--fg,#e0e0e0);font-size:13px;margin-bottom:12px">';
+      aLines.forEach(function(a) { html += '<option value="' + a.id + '">' + (a.idx+1) + '. ' + escHtml(a.label) + '</option>'; });
+      html += '</select>';
+    }
+
+    html += '<div style="display:flex;gap:8px;margin-top:12px">';
+    html += '<button id="sp-ok" style="flex:1;padding:10px;border-radius:8px;border:none;background:var(--accent,#4fc3f7);color:#000;font-weight:bold;font-size:14px;cursor:pointer">开始下载</button>';
+    html += '<button id="sp-cancel" style="flex:1;padding:10px;border-radius:8px;border:1px solid var(--border,#333);background:transparent;color:var(--fg,#e0e0e0);font-size:14px;cursor:pointer">取消</button>';
+    html += '</div>';
+
+    card.innerHTML = html;
+    ov.appendChild(card);
+    document.body.appendChild(ov);
+
+    // 事件绑定
+    document.getElementById('sp-ok').onclick = function() {
+      var vid = document.getElementById('sp-video');
+      var aid = document.getElementById('sp-audio');
+      if(vid) { var sel = vid.options[vid.selectedIndex]; task.videoId = vid.value; }
+      if(aid) { var sel = aid.options[aid.selectedIndex]; task.preferAudio = aid.value; }
+      ov.remove();
+      args[2] = JSON.stringify(task);
+      origFn.apply(origCtx, args);
+    };
+    document.getElementById('sp-cancel').onclick = function() { ov.remove(); };
+    ov.onclick = function(e) { if(e.target === ov) ov.remove(); };
+  }
+
+  function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+})();
+""";
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -89,7 +202,13 @@ class MainActivity : AppCompatActivity() {
             loadWithOverviewMode = true
             domStorageEnabled = true
         }
-        webView.webViewClient = WebViewClient()
+        webView.webViewClient = object : WebViewClient() {
+            override fun onPageFinished(view: android.webkit.WebView?, url: String?) {
+                super.onPageFinished(view, url)
+                // 注入流选择器：拦截下载，先展示实际可用流让用户选择
+                view?.evaluateJavascript(STREAM_PICKER_JS, null)
+            }
+        }
         webView.webChromeClient = WebChromeClient()
         webView.addJavascriptInterface(BBDownBridge(this, webView), "AndroidBridge")
 

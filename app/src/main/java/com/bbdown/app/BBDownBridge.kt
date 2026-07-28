@@ -1048,6 +1048,174 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
         }
     }
 
+    /**
+     * 获取流信息并弹出原生选择对话框，用户选择后回调结果。
+     * 格式与原版 BBDown 一致：展示所有可用流，用户点选。
+     * 回调: ok(reqId, {videoIndex, audioIndex, video: {...}, audio: {...}})
+     */
+    @JavascriptInterface
+    fun fetchAndPickStream(reqId: Int, url: String) {
+        executor.execute {
+            try {
+                val parsed = BilibiliApi.parseUrl(url)
+                val info = BilibiliApi.getVideoInfo(parsed)
+                val isBangumi = parsed.epId.isNotEmpty() && parsed.type != "cheese"
+                val isCheese = parsed.type == "cheese"
+                val firstPage = info.pages.firstOrNull()
+                    ?: PageInfo(index = 1, aid = parsed.aid, cid = "", epid = parsed.epId)
+                val play = BilibiliApi.getPlayInfo(
+                    firstPage.aid, firstPage.cid, firstPage.epid, isBangumi, isCheese = isCheese
+                )
+
+                if (play.videos.isEmpty() && play.audios.isEmpty()) {
+                    err(reqId, "无可用流（可能需要登录Cookie或大会员）")
+                    return@execute
+                }
+
+                // 去重视频流
+                val videoMap = LinkedHashMap<String, com.bbdown.app.core.VideoTrack>()
+                for (v in play.videos) {
+                    val key = "${v.dfn}_${v.codecs}"
+                    val existing = videoMap[key]
+                    if (existing == null || v.bandwidth > existing.bandwidth) videoMap[key] = v
+                }
+                val videoList = videoMap.values.sortedByDescending { it.id.toIntOrNull() ?: 0 }
+
+                // 去重音频流
+                val audioMap = LinkedHashMap<String, com.bbdown.app.core.AudioTrack>()
+                for (a in play.audios) {
+                    val existing = audioMap[a.codecs]
+                    if (existing == null || a.bandwidth > existing.bandwidth) audioMap[a.codecs] = a
+                }
+                val audioList = audioMap.values.sortedByDescending { it.bandwidth }
+
+                // 格式化视频流列表（与原版 BBDown 一致）
+                val videoLabels = videoList.map { v ->
+                    val sizeMB = if (v.size > 0) String.format("~%.2f MB", v.size / 1024 / 1024) else ""
+                    "[${v.dfn}] [${v.res}] [${v.codecs}] [${v.fps}] [${v.bandwidth} kbps] $sizeMB"
+                }
+                // 格式化音频流列表
+                val audioLabels = audioList.map { a ->
+                    val sizeKB = a.bandwidth * (play.dur.coerceAtLeast(1)) / 8 / 1024
+                    val sizeStr = if (sizeKB > 1024) String.format("~%.2f MB", sizeKB / 1024.0)
+                    else String.format("~%.2f KB", sizeKB.toDouble())
+                    "[${a.codecs}] [${a.bandwidth} kbps] $sizeStr"
+                }
+
+                // 构建展示文本
+                val sb = StringBuilder()
+                if (videoList.isNotEmpty()) {
+                    sb.appendLine("共计${videoList.size}条视频流:")
+                    videoLabels.forEachIndexed { i, label -> sb.appendLine("  $i. $label") }
+                }
+                if (audioList.isNotEmpty()) {
+                    if (sb.isNotEmpty()) sb.appendLine()
+                    sb.appendLine("共计${audioList.size}条音频流:")
+                    audioLabels.forEachIndexed { i, label -> sb.appendLine("  $i. $label") }
+                }
+
+                // 在主线程弹出选择对话框
+                val activity = context as? android.app.Activity
+                if (activity == null) {
+                    err(reqId, "无法显示选择对话框")
+                    return@execute
+                }
+
+                // 存储用户选择的结果
+                val resultLock = Object()
+                var userCancelled = true
+                var selectedVideoIdx = 0
+                var selectedAudioIdx = 0
+
+                activity.runOnUiThread {
+                    // 视频选择
+                    if (videoList.isEmpty()) {
+                        // 只有音频，直接选音频
+                        pickAudio(reqId, audioLabels, audioList, play, info, url)
+                        return@runOnUiThread
+                    }
+
+                    val videoArray = videoLabels.toTypedArray()
+                    android.app.AlertDialog.Builder(context)
+                        .setTitle("选择视频流 - ${info.title.take(30)}")
+                        .setSingleChoiceItems(videoArray, 0) { dialog, which ->
+                            selectedVideoIdx = which
+                            dialog.dismiss()
+
+                            // 接着选音频
+                            if (audioList.isEmpty()) {
+                                // 只有视频，直接返回
+                                val v = videoList[selectedVideoIdx]
+                                val result = JSONObject()
+                                result.put("videoIndex", selectedVideoIdx)
+                                result.put("audioIndex", -1)
+                                val vj = JSONObject()
+                                vj.put("id", v.id); vj.put("dfn", v.dfn); vj.put("codecs", v.codecs)
+                                vj.put("bandwidth", v.bandwidth); vj.put("res", v.res); vj.put("fps", v.fps)
+                                vj.put("size", v.size)
+                                result.put("video", vj)
+                                userCancelled = false
+                                ok(reqId, result)
+                            } else {
+                                val audioArray = audioLabels.toTypedArray()
+                                android.app.AlertDialog.Builder(context)
+                                    .setTitle("选择音频流")
+                                    .setSingleChoiceItems(audioArray, 0) { dialog2, which2 ->
+                                        dialog2.dismiss()
+                                        selectedAudioIdx = which2
+                                        val v = videoList[selectedVideoIdx]
+                                        val a = audioList[selectedAudioIdx]
+                                        val result = JSONObject()
+                                        result.put("videoIndex", selectedVideoIdx)
+                                        result.put("audioIndex", selectedAudioIdx)
+                                        val vj = JSONObject()
+                                        vj.put("id", v.id); vj.put("dfn", v.dfn); vj.put("codecs", v.codecs)
+                                        vj.put("bandwidth", v.bandwidth); vj.put("res", v.res); vj.put("fps", v.fps)
+                                        vj.put("size", v.size)
+                                        result.put("video", vj)
+                                        val aj = JSONObject()
+                                        aj.put("id", a.id); aj.put("codecs", a.codecs); aj.put("bandwidth", a.bandwidth)
+                                        result.put("audio", aj)
+                                        userCancelled = false
+                                        ok(reqId, result)
+                                    }
+                                    .setNegativeButton("取消") { d, _ -> d.dismiss(); err(reqId, "用户取消选择") }
+                                    .show()
+                            }
+                        }
+                        .setNegativeButton("取消") { d, _ -> d.dismiss(); err(reqId, "用户取消选择") }
+                        .show()
+                }
+            } catch (e: Exception) {
+                err(reqId, "获取流信息失败: ${e.message}")
+            }
+        }
+    }
+
+    /** 仅音频模式的流选择 */
+    private fun pickAudio(reqId: Int, audioLabels: List<String>, audioList: List<com.bbdown.app.core.AudioTrack>,
+                          play: com.bbdown.app.core.PlayInfo, info: com.bbdown.app.core.VideoInfo, url: String) {
+        val activity = context as? android.app.Activity ?: return
+        val audioArray = audioLabels.toTypedArray()
+        activity.runOnUiThread {
+            android.app.AlertDialog.Builder(context)
+                .setTitle("选择音频流 - ${info.title.take(30)}")
+                .setSingleChoiceItems(audioArray, 0) { dialog, which ->
+                    dialog.dismiss()
+                    val a = audioList[which]
+                    val result = JSONObject()
+                    result.put("videoIndex", -1)
+                    result.put("audioIndex", which)
+                    val aj = JSONObject()
+                    aj.put("id", a.id); aj.put("codecs", a.codecs); aj.put("bandwidth", a.bandwidth)
+                    result.put("audio", aj)
+                    ok(reqId, result)
+                }
+                .setNegativeButton("取消") { d, _ -> d.dismiss(); err(reqId, "用户取消选择") }
+                .show()
+        }
+    }
+
     @JavascriptInterface
     fun addTask(reqId: Int, taskJson: String) {
         executor.execute {
