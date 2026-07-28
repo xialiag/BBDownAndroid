@@ -1,11 +1,22 @@
 package com.bbdown.app
 
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.graphics.Typeface
 import android.net.Uri
 import android.os.Environment
+import android.text.Html
+import android.view.Gravity
+import android.view.View
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
+import android.widget.LinearLayout
+import android.widget.RadioButton
+import android.widget.RadioGroup
+import android.widget.ScrollView
+import android.widget.TextView
+import androidx.appcompat.app.AlertDialog
 import com.bbdown.app.core.BilibiliApi
 import com.bbdown.app.core.DownloadTask
 import com.bbdown.app.core.Http
@@ -15,7 +26,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
  * 暴露给 WebView JS 的原生桥接。所有 B 站下载逻辑在本地执行，无需远程服务。
@@ -1230,16 +1243,39 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
                         epid = p.optString("epid"), title = p.optString("title"), duration = p.optInt("duration")
                     ))
                 }
+                val url = j.optString("url")
+                val title = j.optString("title")
+
+                // 获取实际可用流并让用户选择
+                var selectedVideoId = j.optString("videoId", "80")
+                var selectedAudioId = j.optString("preferAudio", "m4a")
+                try {
+                    if (pages.isNotEmpty()) {
+                        val p = pages[0]
+                        val epid = if (p.epid.isNotEmpty()) p.epid else ""
+                        val play = BilibiliApi.getPlayInfo(p.aid, p.cid, epid, false, "127")
+                        if (play.videos.isNotEmpty() || play.audios.isNotEmpty()) {
+                            val result = showStreamPickerDialog(play, title)
+                            if (result != null) {
+                                selectedVideoId = result.first
+                                selectedAudioId = result.second
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Logger.w("Bridge", "获取流信息失败，使用默认选择: ${e.message}")
+                }
+
                 val taskId = "t_" + System.currentTimeMillis() + "_" + UUID.randomUUID().toString().take(6)
                 val task = DownloadTask(
                     taskId = taskId,
-                    url = j.optString("url"),
-                    title = j.optString("title"),
+                    url = url,
+                    title = title,
                     pic = j.optString("pic"),
                     pages = pages,
-                    videoId = j.optString("videoId", "80"),
+                    videoId = selectedVideoId,
                     preferCodec = j.optString("preferCodec", "avc"),
-                    preferAudio = j.optString("preferAudio", "m4a"),
+                    preferAudio = selectedAudioId,
                     cookie = Http.cookie,
                     downloadMode = j.optString("downloadMode", "all"),
                     downloadDanmaku = j.optBoolean("downloadDanmaku", false),
@@ -1264,6 +1300,116 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
                 ok(reqId, JSONObject().put("taskId", taskId))
             } catch (e: Exception) { err(reqId, "添加任务失败: ${e.message}") }
         }
+    }
+
+    /**
+     * 在 UI 线程弹出流选择对话框，后台线程阻塞等待用户选择。
+     * @return Pair<videoId, audioId> 或 null（用户取消）
+     */
+    private fun showStreamPickerDialog(play: com.bbdown.app.core.PlayInfo, title: String): Pair<String, String>? {
+        val latch = CountDownLatch(1)
+        var result: Pair<String, String>? = null
+
+        val activity = context as? Activity ?: return null
+
+        activity.runOnUiThread {
+            try {
+                val dp = (context.resources.displayMetrics.density * 16).toInt()
+
+                val scrollView = ScrollView(context).apply {
+                    setPadding(dp * 2, dp, dp * 2, dp)
+                }
+                val container = LinearLayout(context).apply {
+                    orientation = LinearLayout.VERTICAL
+                }
+
+                // 视频流分组
+                var selectedVideoIdx = 0
+                if (play.videos.isNotEmpty()) {
+                    container.addView(TextView(context).apply {
+                        text = "视频流 (${play.videos.size}条)"
+                        textSize = 12f
+                        setTextColor(0xFF888888.toInt())
+                        setPadding(0, dp, 0, dp / 2)
+                    })
+                    val vg = RadioGroup(context).apply { orientation = RadioGroup.VERTICAL }
+                    play.videos.forEachIndexed { idx, v ->
+                        val dfn = v.dfn.ifEmpty { "未知" }
+                        val res = if (v.res.isNotEmpty()) "/${v.res}" else ""
+                        val codecs = v.codecs.uppercase()
+                        val fps = if (v.fps.isNotEmpty()) "/${v.fps}fps" else ""
+                        val bw = "${v.bandwidth}kbps"
+                        val label = "$dfn$res $codecs$fps $bw"
+                        val rb = RadioButton(context).apply {
+                            this.text = label
+                            textSize = 14f
+                            id = idx
+                            setPadding(dp / 2, dp / 4, 0, dp / 4)
+                        }
+                        vg.addView(rb)
+                    }
+                    vg.check(0)
+                    vg.setOnCheckedChangeListener { _, checkedId -> selectedVideoIdx = checkedId }
+                    container.addView(vg)
+                }
+
+                // 音频流分组
+                var selectedAudioIdx = 0
+                if (play.audios.isNotEmpty()) {
+                    container.addView(TextView(context).apply {
+                        text = "音频流 (${play.audios.size}条)"
+                        textSize = 12f
+                        setTextColor(0xFF888888.toInt())
+                        setPadding(0, dp * 2, 0, dp / 2)
+                    })
+                    val ag = RadioGroup(context).apply { orientation = RadioGroup.VERTICAL }
+                    play.audios.forEachIndexed { idx, a ->
+                        val codecs = a.codecs.uppercase()
+                        val bw = "${a.bandwidth}kbps"
+                        val label = "$codecs $bw"
+                        val rb = RadioButton(context).apply {
+                            this.text = label
+                            textSize = 14f
+                            id = idx
+                            setPadding(dp / 2, dp / 4, 0, dp / 4)
+                        }
+                        ag.addView(rb)
+                    }
+                    ag.check(0)
+                    ag.setOnCheckedChangeListener { _, checkedId -> selectedAudioIdx = checkedId }
+                    container.addView(ag)
+                }
+
+                scrollView.addView(container)
+
+                val dialog = AlertDialog.Builder(context)
+                    .setTitle("选择流 - $title")
+                    .setView(scrollView)
+                    .setCancelable(true)
+                    .setPositiveButton("下载") { _, _ ->
+                        val vid = if (play.videos.isNotEmpty()) play.videos[selectedVideoIdx].id else ""
+                        val aid = if (play.audios.isNotEmpty()) play.audios[selectedAudioIdx].id else ""
+                        result = Pair(vid, aid)
+                        latch.countDown()
+                    }
+                    .setNegativeButton("取消") { _, _ ->
+                        result = null
+                        latch.countDown()
+                    }
+                    .setOnCancelListener {
+                        result = null
+                        latch.countDown()
+                    }
+                    .create()
+                dialog.show()
+            } catch (e: Exception) {
+                Logger.w("Bridge", "对话框创建失败: ${e.message}")
+                latch.countDown()
+            }
+        }
+
+        latch.await(120, TimeUnit.SECONDS)
+        return result
     }
 
     /** 批量添加任务 */
