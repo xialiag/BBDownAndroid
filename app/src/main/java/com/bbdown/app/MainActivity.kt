@@ -43,64 +43,64 @@ class MainActivity : AppCompatActivity() {
 (function(){
   if(window._streamPickerInjected) return;
   window._streamPickerInjected = true;
-  var _origAddTask = window.callBridge;
-  if(!_origAddTask) return;
-
-  window.callBridge = function(method){
-    var args = Array.prototype.slice.call(arguments);
-    if(method !== 'addTask' || args.length < 3) return _origAddTask.apply(this, args);
-    var reqId = args[1], taskJson = args[2];
-    try { var t = typeof taskJson === 'string' ? JSON.parse(taskJson) : taskJson; } catch(e) { return _origAddTask.apply(this, args); }
-    var url = t.url || '';
-    if(!url) return _origAddTask.apply(this, args);
-
-    // 异步获取流信息，展示选择器
-    var streamReqId = ++window._bseq;
-    window._bres[streamReqId] = {
-      resolve: function(data) { showStreamPicker(data, t, args, _origAddTask, this); },
-      reject: function(err) { toast('获取流信息失败: ' + err, 'err'); }
-    };
-    try { AndroidBridge.getAvailableStreams(streamReqId, url); } catch(e) { toast('获取流信息失败: ' + e, 'err'); }
-    return streamReqId;
-  };
+  var _origCallBridge = window.callBridge;
+  if(!_origCallBridge) return;
 
   function fmtSize(bytes) {
     if(!bytes || bytes <= 0) return '';
     if(bytes >= 1048576) return '~' + (bytes / 1048576).toFixed(2) + ' MB';
     return '~' + (bytes / 1024).toFixed(1) + ' KB';
   }
+  function escH(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
-  function showStreamPicker(data, task, origArgs, origFn, origCtx) {
+  window.callBridge = function(method) {
+    var args = Array.prototype.slice.call(arguments);
+    if(method !== 'addTask' || args.length < 3) return _origCallBridge.apply(this, args);
+    var reqId = args[1], taskJson = args[2];
+    try { var t = typeof taskJson === 'string' ? JSON.parse(taskJson) : taskJson; } catch(e) { return _origCallBridge.apply(this, args); }
+    var url = t.url || '';
+    if(!url) return _origCallBridge.apply(this, args);
+
+    var streamReqId = ++window._bseq;
+    window._bres[streamReqId] = {
+      resolve: function(data) { showPicker(data, t, args, _origCallBridge); },
+      reject: function(err) { toast('获取流信息失败: ' + err, 'err'); }
+    };
+    try { AndroidBridge.getAvailableStreams(streamReqId, url); } catch(e) { toast('获取流信息失败: ' + e, 'err'); }
+    return streamReqId;
+  };
+
+  function showPicker(data, task, origArgs, origFn) {
     var videos = data.videos || [];
     var audios = data.audios || [];
     if(!videos.length && !audios.length) { toast('无可用流','err'); return; }
 
-    // 移除已有选择器
     var old = document.getElementById('sp-overlay');
     if(old) old.remove();
 
-    // 构建选项列表（原版风格）
-    var vLines = videos.map(function(v, i) {
-      var parts = ['[' + (v.dfn||'') + ']'];
-      if(v.res) parts.push('[' + v.res + ']');
-      parts.push('[' + (v.codecs||'') + ']');
-      if(v.fps) parts.push('[' + v.fps + ']');
-      parts.push('[' + (v.bandwidth||0) + ' kbps]');
-      var sz = v.size ? v.size * (v.dur||0) / 8 : 0;
-      if(!sz && v.bandwidth && v.dur) sz = v.bandwidth * 1000 * v.dur / 8;
-      if(sz > 0) parts.push('[' + fmtSize(sz) + ']');
-      return { id: v.id, label: parts.join(' '), idx: i };
+    // 视频流选项 [value, label]
+    var vOpts = videos.map(function(v) {
+      var p = [v.dfn || ''];
+      if(v.res) p.push(v.res);
+      p.push(v.codecs || '');
+      if(v.fps) p.push(v.fps + 'fps');
+      p.push(v.bandwidth + ' kbps');
+      var sz = v.size ? v.size * (data.dur || 0) / 8 : 0;
+      if(!sz && v.bandwidth && data.dur) sz = v.bandwidth * 1000 * data.dur / 8;
+      if(sz > 0) p.push(fmtSize(sz));
+      return [v.id, p.join(' | ')];
     });
 
-    var aLines = audios.map(function(a, i) {
-      var parts = ['[' + (a.codecs||'') + ']'];
-      parts.push('[' + (a.bandwidth||0) + ' kbps]');
+    // 音频流选项
+    var aOpts = audios.map(function(a) {
+      var p = [a.codecs || '', a.bandwidth + ' kbps'];
       var sz = a.bandwidth && data.dur ? a.bandwidth * 1000 * data.dur / 8 : 0;
-      if(sz > 0) parts.push('[' + fmtSize(sz) + ']');
-      return { id: a.id, label: parts.join(' '), idx: i };
+      if(sz > 0) p.push(fmtSize(sz));
+      return [a.id, p.join(' | ')];
     });
 
-    // 创建 overlay
+    var vId = 'sp_v_sel', aId = 'sp_a_sel';
+
     var ov = document.createElement('div');
     ov.id = 'sp-overlay';
     ov.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:99999;display:flex;align-items:center;justify-content:center;overflow-y:auto;padding:20px 0';
@@ -108,46 +108,45 @@ class MainActivity : AppCompatActivity() {
     var card = document.createElement('div');
     card.style.cssText = 'background:var(--bg,#1a1a2e);border:1px solid var(--border,#333);border-radius:12px;padding:20px;max-width:420px;width:90%;max-height:85vh;overflow-y:auto;color:var(--fg,#e0e0e0)';
 
-    var html = '<div style="font-size:16px;font-weight:bold;margin-bottom:12px;text-align:center">选择流 - ' + escHtml(data.title||'') + '</div>';
-
-    if(vLines.length) {
-      html += '<div style="font-size:12px;color:var(--fg-dim,#888);margin:8px 0 4px">视频流 (' + vLines.length + '条)</div>';
-      html += '<select id="sp-video" style="width:100%;padding:8px;border-radius:6px;border:1px solid var(--border,#333);background:var(--bg2,#252540);color:var(--fg,#e0e0e0);font-size:13px;margin-bottom:12px">';
-      vLines.forEach(function(v) { html += '<option value="' + v.id + '">' + (v.idx+1) + '. ' + escHtml(v.label) + '</option>'; });
-      html += '</select>';
+    var h = '<div style="font-size:16px;font-weight:bold;margin-bottom:16px;text-align:center">' + escH(data.title||'选择流') + '</div>';
+    if(vOpts.length) {
+      h += '<div style="font-size:12px;color:var(--fg-dim,#888);margin-bottom:6px">视频流 (' + vOpts.length + '条)</div>';
+      h += '<div id="sp_vw"></div>';
     }
-
-    if(aLines.length) {
-      html += '<div style="font-size:12px;color:var(--fg-dim,#888);margin:8px 0 4px">音频流 (' + aLines.length + '条)</div>';
-      html += '<select id="sp-audio" style="width:100%;padding:8px;border-radius:6px;border:1px solid var(--border,#333);background:var(--bg2,#252540);color:var(--fg,#e0e0e0);font-size:13px;margin-bottom:12px">';
-      aLines.forEach(function(a) { html += '<option value="' + a.id + '">' + (a.idx+1) + '. ' + escHtml(a.label) + '</option>'; });
-      html += '</select>';
+    if(aOpts.length) {
+      h += '<div style="font-size:12px;color:var(--fg-dim,#888);margin:12px 0 6px">音频流 (' + aOpts.length + '条)</div>';
+      h += '<div id="sp_aw"></div>';
     }
+    h += '<div style="display:flex;gap:8px;margin-top:16px">';
+    h += '<button id="sp-ok" class="btn btn-primary" style="flex:1">开始下载</button>';
+    h += '<button id="sp-cancel" class="btn" style="flex:1">取消</button></div>';
 
-    html += '<div style="display:flex;gap:8px;margin-top:12px">';
-    html += '<button id="sp-ok" style="flex:1;padding:10px;border-radius:8px;border:none;background:var(--accent,#4fc3f7);color:#000;font-weight:bold;font-size:14px;cursor:pointer">开始下载</button>';
-    html += '<button id="sp-cancel" style="flex:1;padding:10px;border-radius:8px;border:1px solid var(--border,#333);background:transparent;color:var(--fg,#e0e0e0);font-size:14px;cursor:pointer">取消</button>';
-    html += '</div>';
-
-    card.innerHTML = html;
+    card.innerHTML = h;
     ov.appendChild(card);
     document.body.appendChild(ov);
 
-    // 事件绑定
+    // 用应用的 csHTML 渲染下拉框（和现有音频选择框一样的样式）
+    if(vOpts.length && typeof window.csHTML === 'function') {
+      document.getElementById('sp_vw').innerHTML = window.csHTML(vId, vOpts, vOpts[0][0]);
+      window._csOpts[vId] = vOpts;
+      window._csVal[vId] = vOpts[0][0];
+    }
+    if(aOpts.length && typeof window.csHTML === 'function') {
+      document.getElementById('sp_aw').innerHTML = window.csHTML(aId, aOpts, aOpts[0][0]);
+      window._csOpts[aId] = aOpts;
+      window._csVal[aId] = aOpts[0][0];
+    }
+
     document.getElementById('sp-ok').onclick = function() {
-      var vid = document.getElementById('sp-video');
-      var aid = document.getElementById('sp-audio');
-      if(vid) { var sel = vid.options[vid.selectedIndex]; task.videoId = vid.value; }
-      if(aid) { var sel = aid.options[aid.selectedIndex]; task.preferAudio = aid.value; }
+      if(vOpts.length) task.videoId = window._csVal[vId] || vOpts[0][0];
+      if(aOpts.length) task.preferAudio = window._csVal[aId] || aOpts[0][0];
       ov.remove();
-      args[2] = JSON.stringify(task);
-      origFn.apply(origCtx, args);
+      origArgs[2] = JSON.stringify(task);
+      origFn.apply(null, origArgs);
     };
     document.getElementById('sp-cancel').onclick = function() { ov.remove(); };
     ov.onclick = function(e) { if(e.target === ov) ov.remove(); };
   }
-
-  function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 })();
 """;
     }
