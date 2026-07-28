@@ -215,7 +215,7 @@ object DownloadEngine {
                             if (!task.skipCover && task.pic.isNotEmpty()) {
                                 try {
                                     val bytes = BilibiliApi.downloadCover(task.pic)
-                                    coverFile = File(workDir, sanitize(task.title) + ".cover")
+                                    coverFile = File(workDir, sanitize(task.title) + coverExtension(bytes))
                                     coverFile.writeBytes(bytes)
                                 } catch (_: Exception) {}
                             }
@@ -268,12 +268,12 @@ object DownloadEngine {
                             // 仅 audio_only 或 skipMux 时走此分支（video_only+skipMux 时视频和音频分别注入）
                             if (task.status == DownloadTask.STATUS_CANCELED) return
                             if (task.status == DownloadTask.STATUS_PAUSED) return
-                            // 下载封面（用于嵌入元数据）— 使用原始URL，保留原始格式（与 DotNet 版一致）
+                            // 下载封面（用于嵌入元数据）
                             var coverFile: File? = null
                             if (!task.skipCover && task.pic.isNotEmpty()) {
                                 try {
                                     val bytes = BilibiliApi.downloadCover(task.pic)
-                                    coverFile = File(workDir, sanitize(task.title) + ".cover")
+                                    coverFile = File(workDir, sanitize(task.title) + coverExtension(bytes))
                                     coverFile.writeBytes(bytes)
                                 } catch (_: Exception) {}
                             }
@@ -433,12 +433,21 @@ object DownloadEngine {
     private fun downloadCover(task: DownloadTask, workDir: File, outputs: ArrayList<String>) {
         try {
             if (task.pic.isEmpty()) return
-            // 使用原始URL，保留原始格式（与 DotNet 版一致）
             val bytes = BilibiliApi.downloadCover(task.pic)
-            val coverFile = File(workDir, sanitize(task.title) + ".cover")
+            val ext = coverExtension(bytes)
+            val coverFile = File(workDir, sanitize(task.title) + ext)
             coverFile.writeBytes(bytes)
             outputs.add(coverFile.absolutePath)
         } catch (_: Exception) {}
+    }
+
+    /** 根据文件头魔数判断封面格式，返回对应扩展名 */
+    private fun coverExtension(bytes: ByteArray): String {
+        if (bytes.size >= 12 &&
+            bytes[0] == 0x52.toByte() && bytes[1] == 0x49.toByte() &&  // RIFF
+            bytes[8] == 0x57.toByte() && bytes[9] == 0x45.toByte() &&  // WEBP
+            bytes[10] == 0x42.toByte() && bytes[11] == 0x50.toByte()) return ".webp"
+        return ".jpg"
     }
 
     private fun downloadDanmaku(page: PageInfo, workDir: File, outputs: ArrayList<String>) {
