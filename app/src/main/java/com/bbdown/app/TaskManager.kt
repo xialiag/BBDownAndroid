@@ -1,7 +1,9 @@
 package com.bbdown.app
 
 import android.app.ActivityManager
+import android.content.ComponentCallbacks2
 import android.content.Context
+import android.content.res.Configuration
 import com.bbdown.app.core.DownloadEngine
 import com.bbdown.app.core.DownloadTask
 import com.bbdown.app.core.Http
@@ -45,13 +47,44 @@ object TaskManager {
     private var appContext: Context? = null
     private val pendingCount = AtomicInteger(0)
 
+    // === 内存动态管理 ===
+    /** 系统内存压力级别：0=正常, 1=偏低, 2=紧张, 3=危险, 4=临界 */
+    @Volatile private var memPressureLevel = 0
+    /** JVM 堆内存使用率上限（超过则降低并发） */
+    private const val HEAP_WARN_RATIO = 0.75f
+    private const val HEAP_CRITICAL_RATIO = 0.90f
+
     val all: List<DownloadTask> get() = tasks.values.sortedByDescending { it.seq }
 
     fun get(id: String): DownloadTask? = tasks[id]
 
-    /** 初始化上下文（应用启动时调用） */
+    /** 初始化上下文（应用启动时调用），注册系统内存回调 */
     fun init(context: Context) {
         appContext = context.applicationContext
+        // 注册系统内存压力回调，实时响应 onTrimMemory
+        try {
+            context.applicationContext.registerComponentCallbacks(object : ComponentCallbacks2 {
+                override fun onTrimMemory(level: Int) {
+                    memPressureLevel = when {
+                        level >= ComponentCallbacks2.TRIM_MEMORY_COMPLETE -> 4
+                        level >= ComponentCallbacks2.TRIM_MEMORY_MODERATE -> 3
+                        level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND -> 2
+                        level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW -> 1
+                        else -> 0
+                    }
+                    if (memPressureLevel >= 2) {
+                        Logger.w("TaskManager", "系统内存压力回调: level=$level, 调整等级=$memPressureLevel")
+                        System.gc()
+                    }
+                }
+                override fun onConfigurationChanged(newConfig: Configuration) {}
+                override fun onLowMemory() {
+                    memPressureLevel = 4
+                    Logger.w("TaskManager", "系统低内存回调，强制GC")
+                    System.gc()
+                }
+            })
+        } catch (_: Exception) {}
     }
 
     fun add(task: DownloadTask): DownloadTask {
@@ -90,10 +123,10 @@ object TaskManager {
                     return@execute
                 }
                 Logger.i("TaskManager", "开始执行任务[seq=${task.seq}](thread=${Thread.currentThread().name}): ${task.title}")
-                // 内存压力检测：可用内存不足时降低线程数
+                // 内存压力检测：综合系统内存+JVM堆+onTrimMemory 三层信号
                 val effectiveThreads = getEffectiveThreads()
                 if (effectiveThreads != threads) {
-                    Logger.w("TaskManager", "内存压力检测：线程数 ${threads} → ${effectiveThreads}")
+                    Logger.w("TaskManager", "内存压力：线程 ${threads}→${effectiveThreads} | ${getMemoryStatus()}")
                 }
                 DownloadEngine.execute(task, outputDir, effectiveThreads)
             } catch (e: OutOfMemoryError) {
@@ -130,24 +163,75 @@ object TaskManager {
     }
 
     /**
-     * 根据可用内存动态调整下载线程数，防止 OOM。
-     * - 可用内存 > 128MB：使用用户设定的线程数
-     * - 可用内存 64~128MB：降至 4 线程
-     * - 可用内存 < 64MB：降至 2 线程
+     * 综合内存状态动态调整下载线程数，结合三层信号防止 OOM：
+     * 1. 系统可用内存（ActivityManager）
+     * 2. JVM 堆内存使用率（Runtime）
+     * 3. 系统 onTrimMemory 回调压力等级
+     *
+     * 取三者中最保守的值：
+     * - 任一信号到"危险"级别 → 最多 1 线程
+     * - 任一信号到"紧张"级别 → 最多 2 线程
+     * - 任一信号到"偏低"级别 → 最多 4 线程
+     * - 全部正常 → 使用用户设定值
      */
     private fun getEffectiveThreads(): Int {
-        val ctx = appContext ?: return threads.coerceAtMost(4)
-        return try {
-            val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
-            val memInfo = ActivityManager.MemoryInfo()
-            am?.getMemoryInfo(memInfo)
-            val availMB = memInfo.availMem / (1024 * 1024)
-            when {
-                availMB < 64 -> threads.coerceAtMost(2)
-                availMB < 128 -> threads.coerceAtMost(4)
+        var maxThreads = threads
+        // 信号1：系统可用内存
+        val ctx = appContext
+        if (ctx != null) {
+            try {
+                val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+                val memInfo = ActivityManager.MemoryInfo()
+                am?.getMemoryInfo(memInfo)
+                val availMB = memInfo.availMem / (1024 * 1024)
+                val sysLimit = when {
+                    availMB < 32 -> 1
+                    availMB < 64 -> 2
+                    availMB < 128 -> 4
+                    availMB < 256 -> 6
+                    else -> threads
+                }
+                maxThreads = maxThreads.coerceAtMost(sysLimit)
+            } catch (_: Exception) {}
+        }
+        // 信号2：JVM 堆内存使用率
+        try {
+            val rt = Runtime.getRuntime()
+            val maxHeap = rt.maxMemory()
+            val usedHeap = rt.totalMemory() - rt.freeMemory()
+            val heapRatio = usedHeap.toFloat() / maxHeap
+            val heapLimit = when {
+                heapRatio >= HEAP_CRITICAL_RATIO -> 1  // 堆使用 >90%：极危险
+                heapRatio >= HEAP_WARN_RATIO -> 2      // 堆使用 >75%：偏高
                 else -> threads
             }
-        } catch (_: Exception) { threads.coerceAtMost(4) }
+            maxThreads = maxThreads.coerceAtMost(heapLimit)
+        } catch (_: Exception) {}
+        // 信号3：系统 onTrimMemory 压力等级
+        val trimLimit = when (memPressureLevel) {
+            4 -> 1  // TRIM_MEMORY_COMPLETE：临界
+            3 -> 1  // TRIM_MEMORY_MODERATE：危险
+            2 -> 2  // TRIM_MEMORY_BACKGROUND：紧张
+            1 -> 4  // TRIM_MEMORY_RUNNING_LOW：偏低
+            else -> threads
+        }
+        maxThreads = maxThreads.coerceAtMost(trimLimit)
+        return maxThreads.coerceAtLeast(1) // 至少保证 1 线程
+    }
+
+    /** 获取当前内存状态摘要（供日志和调试用） */
+    fun getMemoryStatus(): String {
+        val rt = Runtime.getRuntime()
+        val maxHeap = rt.maxMemory() / (1024 * 1024)
+        val usedHeap = (rt.totalMemory() - rt.freeMemory()) / (1024 * 1024)
+        val heapRatio = String.format("%.0f%%", (usedHeap.toFloat() / maxHeap) * 100)
+        val sysAvail = try {
+            val am = appContext?.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+            val memInfo = ActivityManager.MemoryInfo()
+            am?.getMemoryInfo(memInfo)
+            "${memInfo.availMem / (1024 * 1024)}MB"
+        } catch (_: Exception) { "未知" }
+        return "系统可用=$sysAvail, JVM堆=${usedHeap}MB/${maxHeap}MB($heapRatio), 压力等级=$memPressureLevel"
     }
 
     /** 注册下载器实例，用于取消时中断 */
@@ -215,7 +299,6 @@ object TaskManager {
                 }
                 if (pendingCount.get() > 0) {
                     System.gc()
-                    Thread.sleep(200)
                 }
             }
         }
@@ -323,7 +406,6 @@ object TaskManager {
                 }
                 if (pendingCount.get() > 0) {
                     System.gc()
-                    Thread.sleep(200)
                 }
             }
         }
