@@ -43,8 +43,9 @@ class MainActivity : AppCompatActivity() {
 (function(){
   if(window._streamPickerInjected) return;
   window._streamPickerInjected = true;
-  var _origCallBridge = window.callBridge;
-  if(!_origCallBridge) return;
+  // 拦截 AndroidBridge.addTask（app.js 的 callBridge 内部直接调用 AndroidBridge[method]）
+  var _origAddTask = AndroidBridge.addTask;
+  if(!_origAddTask) return;
 
   function fmtSize(bytes) {
     if(!bytes || bytes <= 0) return '';
@@ -53,24 +54,21 @@ class MainActivity : AppCompatActivity() {
   }
   function escH(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
-  window.callBridge = function(method) {
-    var args = Array.prototype.slice.call(arguments);
-    if(method !== 'addTask' || args.length < 3) return _origCallBridge.apply(this, args);
-    var reqId = args[1], taskJson = args[2];
-    try { var t = typeof taskJson === 'string' ? JSON.parse(taskJson) : taskJson; } catch(e) { return _origCallBridge.apply(this, args); }
+  // 替换 addTask：先获取流，展示选择器，用户选完后再调用原始 addTask
+  AndroidBridge.addTask = function(reqId, taskJson) {
+    try { var t = typeof taskJson === 'string' ? JSON.parse(taskJson) : taskJson; } catch(e) { return _origAddTask.call(AndroidBridge, reqId, taskJson); }
     var url = t.url || '';
-    if(!url) return _origCallBridge.apply(this, args);
+    if(!url) return _origAddTask.call(AndroidBridge, reqId, taskJson);
 
     var streamReqId = ++window._bseq;
     window._bres[streamReqId] = {
-      resolve: function(data) { showPicker(data, t, args, _origCallBridge); },
+      resolve: function(data) { showPicker(data, t, reqId, taskJson); },
       reject: function(err) { toast('获取流信息失败: ' + err, 'err'); }
     };
     try { AndroidBridge.getAvailableStreams(streamReqId, url); } catch(e) { toast('获取流信息失败: ' + e, 'err'); }
-    return streamReqId;
   };
 
-  function showPicker(data, task, origArgs, origFn) {
+  function showPicker(data, task, origReqId, origTaskJson) {
     var videos = data.videos || [];
     var audios = data.audios || [];
     if(!videos.length && !audios.length) { toast('无可用流','err'); return; }
@@ -141,8 +139,8 @@ class MainActivity : AppCompatActivity() {
       if(vOpts.length) task.videoId = window._csVal[vId] || vOpts[0][0];
       if(aOpts.length) task.preferAudio = window._csVal[aId] || aOpts[0][0];
       ov.remove();
-      origArgs[2] = JSON.stringify(task);
-      origFn.apply(null, origArgs);
+      // 调用原始 addTask，传递原始 reqId 和更新后的 taskJson
+      _origAddTask.call(AndroidBridge, origReqId, JSON.stringify(task));
     };
     document.getElementById('sp-cancel').onclick = function() { ov.remove(); };
     ov.onclick = function(e) { if(e.target === ov) ov.remove(); };
