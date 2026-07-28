@@ -43,9 +43,13 @@ class MainActivity : AppCompatActivity() {
 (function(){
   if(window._streamPickerInjected) return;
   window._streamPickerInjected = true;
+  console.log('[StreamPicker] 注入成功');
   // 拦截 AndroidBridge.addTask（app.js 的 callBridge 内部直接调用 AndroidBridge[method]）
+  if(typeof AndroidBridge === 'undefined' || !AndroidBridge.addTask) {
+    console.log('[StreamPicker] AndroidBridge 未就绪，跳过');
+    return;
+  }
   var _origAddTask = AndroidBridge.addTask;
-  if(!_origAddTask) return;
 
   function fmtSize(bytes) {
     if(!bytes || bytes <= 0) return '';
@@ -56,19 +60,52 @@ class MainActivity : AppCompatActivity() {
 
   // 替换 addTask：先获取流，展示选择器，用户选完后再调用原始 addTask
   AndroidBridge.addTask = function(reqId, taskJson) {
+    console.log('[StreamPicker] addTask 拦截: reqId=' + reqId);
     try { var t = typeof taskJson === 'string' ? JSON.parse(taskJson) : taskJson; } catch(e) { return _origAddTask.call(AndroidBridge, reqId, taskJson); }
     var url = t.url || '';
     if(!url) return _origAddTask.call(AndroidBridge, reqId, taskJson);
-
-    var streamReqId = ++window._bseq;
-    window._bres[streamReqId] = {
-      resolve: function(data) { showPicker(data, t, reqId, taskJson); },
-      reject: function(err) { toast('获取流信息失败: ' + err, 'err'); }
-    };
-    try { AndroidBridge.getAvailableStreams(streamReqId, url); } catch(e) { toast('获取流信息失败: ' + e, 'err'); }
+    fetchAndPick(t, function(updated) {
+      _origAddTask.call(AndroidBridge, reqId, JSON.stringify(updated));
+    });
   };
 
-  function showPicker(data, task, origReqId, origTaskJson) {
+  // 替换 addBatchTasks：批量下载也需要拦截（合集/分P）
+  var _origAddBatch = AndroidBridge.addBatchTasks;
+  if(_origAddBatch) {
+    AndroidBridge.addBatchTasks = function(reqId, tasksJson) {
+      console.log('[StreamPicker] addBatchTasks 拦截: reqId=' + reqId);
+      try { var tasks = typeof tasksJson === 'string' ? JSON.parse(tasksJson) : tasksJson; } catch(e) { return _origAddBatch.call(AndroidBridge, reqId, tasksJson); }
+      if(!tasks.length) return _origAddBatch.call(AndroidBridge, reqId, tasksJson);
+      // 取第一个任务获取流信息，展示选择器
+      var first = tasks[0];
+      fetchAndPick(first, function(updated) {
+        // 用选定的视频/音频ID更新所有任务
+        var newTasks = tasks.map(function(t) {
+          t.videoId = updated.videoId;
+          t.preferAudio = updated.preferAudio;
+          return t;
+        });
+        _origAddBatch.call(AndroidBridge, reqId, JSON.stringify(newTasks));
+      });
+    };
+  }
+
+  function fetchAndPick(task, onConfirm) {
+    var url = task.url || '';
+    if(!url) { onConfirm(task); return; }
+    console.log('[StreamPicker] 获取流: ' + url);
+    var streamReqId = ++window._bseq;
+    window._bres[streamReqId] = {
+      resolve: function(data) {
+        console.log('[StreamPicker] 流数据: videos=' + (data.videos||[]).length + ' audios=' + (data.audios||[]).length);
+        showPicker(data, task, onConfirm);
+      },
+      reject: function(err) { console.log('[StreamPicker] 获取失败: ' + err); toast('获取流信息失败: ' + err, 'err'); }
+    };
+    try { AndroidBridge.getAvailableStreams(streamReqId, url); } catch(e) { console.log('[StreamPicker] 异常: ' + e); toast('获取流信息失败: ' + e, 'err'); }
+  }
+
+  function showPicker(data, task, onConfirm) {
     var videos = data.videos || [];
     var audios = data.audios || [];
     if(!videos.length && !audios.length) { toast('无可用流','err'); return; }
@@ -139,8 +176,7 @@ class MainActivity : AppCompatActivity() {
       if(vOpts.length) task.videoId = window._csVal[vId] || vOpts[0][0];
       if(aOpts.length) task.preferAudio = window._csVal[aId] || aOpts[0][0];
       ov.remove();
-      // 调用原始 addTask，传递原始 reqId 和更新后的 taskJson
-      _origAddTask.call(AndroidBridge, origReqId, JSON.stringify(task));
+      onConfirm(task);
     };
     document.getElementById('sp-cancel').onclick = function() { ov.remove(); };
     ov.onclick = function(e) { if(e.target === ov) ov.remove(); };
