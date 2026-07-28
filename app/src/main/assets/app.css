@@ -546,6 +546,15 @@ input::placeholder,textarea::placeholder{color:var(--fg-dim);opacity:.6}
 .cs-option.sel{color:var(--accent);font-weight:600;background:rgba(251,114,153,.08)}
 .cs-option .cs-check{width:15px;height:15px;flex:0 0 auto;opacity:0;color:var(--accent)}
 .cs-option.sel .cs-check{opacity:1}
+/* 视频流双行选项 */
+.cs-option-stream{align-items:center;padding:8px 12px}
+.cos-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.cos-main{font-size:13px;font-weight:500;color:var(--fg-bright);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cos-codec{color:var(--accent);font-weight:600}
+.cos-fps{font-size:11px;color:var(--fg-dim);font-weight:400}
+.cos-sub{font-size:11px;color:var(--fg-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cs-option-stream.sel .cos-main{color:var(--accent)}
+.cs-option-stream.sel .cos-sub{color:var(--accent);opacity:.7}
 
 /* ===== 药丸式选择器(编码/音频) ===== */
 .pill-group{display:inline-flex;gap:3px;background:var(--pill-bg);border:1px solid var(--pill-border);border-radius:10px;padding:3px}

@@ -300,27 +300,51 @@ function csHTML(id, options, currentVal){
     </button>
   </div>`;
 }
+/** 视频流专用下拉：按钮显示简短标签，展开后双行布局 */
+function csStreamHTML(id, streams, currentVal){
+  const cur = streams.find(s=>s.key===currentVal);
+  const shortLabel = cur ? `${cur.dfn} ${cur.codecs}${cur.fps?' '+cur.fps+'fps':''}` : (streams.length?`${streams[0].dfn} ${streams[0].codecs}`:'');
+  window._csStreamData = window._csStreamData||{};
+  window._csStreamData[id] = streams;
+  return `<div class="cs-wrap" data-cs="${id}" data-cs-stream="1">
+    <button class="cs-btn" type="button" onclick="csToggle('${id}')">
+      <span class="cs-label" id="csLabel_${id}">${esc(shortLabel)}</span>
+      <svg class="cs-arrow" viewBox="0 0 10 10"><path fill="currentColor" d="M5 7L1 3h8z"/></svg>
+    </button>
+  </div>`;
+}
 function csToggle(id){
   const wrap = document.querySelector(`[data-cs="${id}"]`);
   if(!wrap) return;
   const btn = wrap.querySelector('.cs-btn');
-  // 关闭已打开的面板
   document.querySelectorAll('.cs-panel').forEach(p=>p.remove());
   document.querySelectorAll('.cs-btn.open').forEach(b=>b.classList.remove('open'));
-  // 构建面板
-  const opts = window._csOpts[id];
-  if(!opts) return;
-  const curVal = window._csVal[id];
+  const isStream = wrap.dataset.csStream === '1';
   const panel = document.createElement('div');
   panel.className = 'cs-panel';
-  panel.innerHTML = opts.map(([v,l])=>`
-    <div class="cs-option ${v===curVal?'sel':''}" onclick="csSelect('${id}','${esc(v)}','${esc(l)}')">
-      <span>${esc(l)}</span>
-      <svg class="cs-check" viewBox="0 0 14 14"><path fill="currentColor" d="M5.5 10L2 6.5l1-1L5.5 8l5-5 1 1z"/></svg>
-    </div>`).join('');
+  if(isStream){
+    const streams = (window._csStreamData||{})[id]||[];
+    const curVal = window._csVal[id];
+    panel.innerHTML = streams.map(s=>`
+      <div class="cs-option cs-option-stream ${s.key===curVal?'sel':''}" onclick="csSelectStream('${id}','${esc(s.key)}','${esc(s.dfn+' '+(s.codecs||'')+(s.fps?' '+s.fps+'fps':''))}')">
+        <div class="cos-body">
+          <div class="cos-main">${esc(s.dfn)} <span class="cos-codec">${esc((s.codecs||'').toUpperCase())}${s.fps?' <span class="cos-fps">'+esc(s.fps)+'fps</span>':''}</span></div>
+          <div class="cos-sub">${s.res?esc(s.res)+' · ':''}${s.bandwidth?s.bandwidth+'kbps':''}${s.size?' · '+s.size:''}</div>
+        </div>
+        <svg class="cs-check" viewBox="0 0 14 14"><path fill="currentColor" d="M5.5 10L2 6.5l1-1L5.5 8l5-5 1 1z"/></svg>
+      </div>`).join('');
+  } else {
+    const opts = window._csOpts[id];
+    if(!opts) return;
+    const curVal = window._csVal[id];
+    panel.innerHTML = opts.map(([v,l])=>`
+      <div class="cs-option ${v===curVal?'sel':''}" onclick="csSelect('${id}','${esc(v)}','${esc(l)}')">
+        <span>${esc(l)}</span>
+        <svg class="cs-check" viewBox="0 0 14 14"><path fill="currentColor" d="M5.5 10L2 6.5l1-1L5.5 8l5-5 1 1z"/></svg>
+      </div>`).join('');
+  }
   wrap.appendChild(panel);
   btn.classList.add('open');
-  // 点击外部关闭
   setTimeout(()=>{
     const handler = (e)=>{
       if(!wrap.contains(e.target)){ panel.remove(); btn.classList.remove('open'); document.removeEventListener('click',handler); }
@@ -328,13 +352,21 @@ function csToggle(id){
     document.addEventListener('click',handler);
   },0);
 }
+function csSelectStream(id, val, shortLabel){
+  window._csVal[id] = val;
+  const lbl = document.getElementById('csLabel_'+id);
+  if(lbl) lbl.textContent = shortLabel;
+  const cb = window._csCallback[id];
+  if(cb) cb(val);
+  document.querySelectorAll('.cs-panel').forEach(p=>p.remove());
+  document.querySelectorAll('.cs-btn.open').forEach(b=>b.classList.remove('open'));
+}
 function csSelect(id, val, label){
   window._csVal[id] = val;
   const lbl = document.getElementById('csLabel_'+id);
   if(lbl) lbl.textContent = label;
   const cb = window._csCallback[id];
   if(cb) cb(val);
-  // 清理
   document.querySelectorAll('.cs-panel').forEach(p=>p.remove());
   document.querySelectorAll('.cs-btn.open').forEach(b=>b.classList.remove('open'));
 }
@@ -1234,19 +1266,20 @@ function renderEditor_ParseFlow(eb){
   window._csOpts['sel_mode'] = modeOpts;
   window._csVal['sel_mode'] = state.downloadMode;
   window._csCallback['sel_mode'] = (v)=>{ state.downloadMode=v; renderEditor(); };
-  // 视频流下拉
+  // 视频流下拉（使用结构化双行布局）
   if(qnList.length){
-    const vStreamOpts = qnList.map(v=>{
-      const key = v.id + '|' + (v.codecs||'').toLowerCase();
-      const bw = v.bandwidth ? ` ${v.bandwidth}kbps` : '';
-      const fps = v.fps ? ` ${v.fps}fps` : '';
-      const res = v.res ? ` ${v.res}` : '';
-      const label = `${v.dfn||v.id}${res} ${(v.codecs||'').toUpperCase()}${fps}${bw}`;
-      return [key, label];
-    });
-    // 默认选第一条
-    if(!state.selectedVideoStream) state.selectedVideoStream = vStreamOpts[0][0];
-    window._csOpts['sel_vstream'] = vStreamOpts;
+    const vStreamData = qnList.map(v=>({
+      key: v.id + '|' + (v.codecs||'').toLowerCase(),
+      dfn: v.dfn || v.id,
+      codecs: (v.codecs||'').toUpperCase(),
+      fps: v.fps || '',
+      res: v.res || '',
+      bandwidth: v.bandwidth ? v.bandwidth+'kbps' : '',
+      size: ''
+    }));
+    if(!state.selectedVideoStream) state.selectedVideoStream = vStreamData[0].key;
+    window._csStreamData = window._csStreamData||{};
+    window._csStreamData['sel_vstream'] = vStreamData;
     window._csVal['sel_vstream'] = state.selectedVideoStream;
     window._csCallback['sel_vstream'] = (v)=>{ state.selectedVideoStream=v; };
   }
@@ -1296,7 +1329,7 @@ function renderEditor_ParseFlow(eb){
       ${(qnList.length && (state.downloadMode==='all' || state.downloadMode==='video_only')) ? `
         <div class="compact-field">
           <label>视频流</label>
-          ${csHTML('sel_vstream', qnList.map(v=>{const key=v.id+'|'+(v.codecs||'').toLowerCase();const bw=v.bandwidth?` ${v.bandwidth}kbps`:'';const fps=v.fps?` ${v.fps}fps`:'';const res=v.res?` ${v.res}`:'';return [key,`${v.dfn||v.id}${res} ${(v.codecs||'').toUpperCase()}${fps}${bw}`];}), state.selectedVideoStream)}
+          ${csStreamHTML('sel_vstream', (window._csStreamData||{})['sel_vstream']||[], state.selectedVideoStream)}
         </div>
       ` : ''}
       ${(state.downloadMode==='all' || state.downloadMode==='audio_only') ? `
