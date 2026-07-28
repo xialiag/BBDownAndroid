@@ -86,16 +86,12 @@ object FFmpegMuxer {
         if (jpegCover != null) {
             inputCount.add(jpegCover)
         }
-        // 字幕文件作为额外输入
-        val validSubs = subtitles.filter { it.file.exists() && it.file.length() > 0 }
-        for (sub in validSubs) {
-            inputCount.add(sub.file)
-        }
+        // 注意：字幕不嵌入 MP4 流（与原版 BBDown 一致），只保存为独立 .srt 文件
         for (input in inputCount) {
             cmd.add("-i"); cmd.add(input.absolutePath)
         }
 
-        // 全量 map（原版 BBDown 使用 -map {i} 映射所有输入）
+        // 全量 map
         for (i in inputCount.indices) {
             cmd.add("-map"); cmd.add(i.toString())
         }
@@ -106,20 +102,9 @@ object FFmpegMuxer {
             cmd.add("-disposition:v:1"); cmd.add("attached_pic")
         }
 
-        // 字幕流元数据（参考原版 BBDown: -metadata:s:s:{i} title=... language=...）
-        for ((i, sub) in validSubs.withIndex()) {
-            cmd.add("-metadata:s:s:$i"); cmd.add("title=${escapeMetadata(sub.lanDoc)}")
-            cmd.add("-metadata:s:s:$i"); cmd.add("language=${sub.isoCode}")
-        }
-
         // 流复制
         cmd.add("-c:v"); cmd.add("copy")
         cmd.add("-c:a"); cmd.add("copy")
-
-        // 字幕编码转换为 mov_text（与原版 BBDown 一致）
-        if (validSubs.isNotEmpty()) {
-            cmd.add("-c:s"); cmd.add("mov_text")
-        }
 
         // 元数据
         addMetadata(cmd, title, album, artist, desc, pubTime)
@@ -182,16 +167,12 @@ object FFmpegMuxer {
         if (jpegCover != null) {
             inputCount.add(jpegCover)
         }
-        // 字幕文件作为额外输入
-        val validSubs = subtitles.filter { it.file.exists() && it.file.length() > 0 }
-        for (sub in validSubs) {
-            inputCount.add(sub.file)
-        }
+        // 注意：字幕不嵌入 MP4/M4A 流（与原版 BBDown 一致），只保存为独立 .srt 文件
         for (input in inputCount) {
             cmd.add("-i"); cmd.add(input.absolutePath)
         }
 
-        // 全量 map（原版 BBDown 使用 -map {i} 映射所有输入）
+        // 全量 map
         for (i in inputCount.indices) {
             cmd.add("-map"); cmd.add(i.toString())
         }
@@ -204,20 +185,9 @@ object FFmpegMuxer {
             cmd.add("-disposition:v:$coverStreamIdx"); cmd.add("attached_pic")
         }
 
-        // 字幕流元数据
-        for ((i, sub) in validSubs.withIndex()) {
-            cmd.add("-metadata:s:s:$i"); cmd.add("title=${escapeMetadata(sub.lanDoc)}")
-            cmd.add("-metadata:s:s:$i"); cmd.add("language=${sub.isoCode}")
-        }
-
         // 流复制
         cmd.add("-c:v"); cmd.add("copy")
         cmd.add("-c:a"); cmd.add("copy")
-
-        // 字幕编码转换为 mov_text
-        if (validSubs.isNotEmpty()) {
-            cmd.add("-c:s"); cmd.add("mov_text")
-        }
 
         // 元数据
         addMetadata(cmd, title, album, artist, desc, pubTime)
@@ -317,12 +287,12 @@ object FFmpegMuxer {
     /**
      * 转义元数据值。
      *
-     * 注意：FFmpegKit 的 executeWithArguments 直接将参数作为 argv 传给 FFmpeg，
-     * 不走 shell 解析，因此不能做 shell 转义。早期版本将 `\` 翻倍为 `\\`、将 `"` 替换为 `'`，
-     * 会篡改元数据值（如标题中的反斜杠和引号被错误改写）。现仅清理换行符，保证值原样传递。
+     * FFmpegKit 的 executeWithArguments 直接将参数作为 argv 传给 FFmpeg，
+     * 不走 shell 解析，因此可以保留换行符等特殊字符。
+     * 仅清理回车符（\r），保留换行符（\n），与原版 BBDown 行为一致。
      */
     private fun escapeMetadata(s: String): String {
-        return s.replace("\r", " ").replace("\n", " ")
+        return s.replace("\r", "")
     }
 
     /** 记录完整元数据值到日志，便于验证（对应修复5的调试日志增强）。 */
