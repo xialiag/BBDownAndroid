@@ -319,8 +319,11 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
         executor.execute {
             try {
                 val logDir = File(context.getExternalFilesDir(null), "logs")
-                val file = File(logDir, filename)
-                if (!file.exists() || !(file.name.startsWith("crash_") || file.name.startsWith("native_crash_") || file.name.startsWith("native_signal_"))) {
+                // 防止路径穿越：取文件名最后一段，丢弃目录部分
+                val safeName = File(filename).name
+                val file = File(logDir, safeName)
+                if (!file.exists() || !file.canonicalPath.startsWith(logDir.canonicalPath)
+                    || !(safeName.startsWith("crash_") || safeName.startsWith("native_crash_") || safeName.startsWith("native_signal_"))) {
                     err(reqId, "日志文件不存在")
                     return@execute
                 }
@@ -339,8 +342,11 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
         executor.execute {
             try {
                 val logDir = File(context.getExternalFilesDir(null), "logs")
-                val file = File(logDir, filename)
-                if (!file.exists() || !(file.name.startsWith("crash_") || file.name.startsWith("native_crash_") || file.name.startsWith("native_signal_"))) {
+                // 防止路径穿越：取文件名最后一段，丢弃目录部分
+                val safeName = File(filename).name
+                val file = File(logDir, safeName)
+                if (!file.exists() || !file.canonicalPath.startsWith(logDir.canonicalPath)
+                    || !(safeName.startsWith("crash_") || safeName.startsWith("native_crash_") || safeName.startsWith("native_signal_"))) {
                     err(reqId, "日志文件不存在")
                     return@execute
                 }
@@ -1263,7 +1269,11 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
                         val logDir = File(context.getExternalFilesDir(null), "logs")
                         if (logDir.exists()) {
                             logDir.listFiles()?.forEach { f ->
-                                if (f.isFile && !f.name.startsWith("crash_")) { cleared += f.length(); f.delete() }
+                                if (f.isFile && !f.name.startsWith("crash_")
+                                    && !f.name.startsWith("native_crash_")
+                                    && !f.name.startsWith("native_signal_")) {
+                                    cleared += f.length(); f.delete()
+                                }
                             }
                         }
                     }
@@ -1650,8 +1660,20 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
         }
     }
 
+    /** 允许通过 Bridge 修改的设置键白名单，防止覆盖 cookie 等敏感键 */
+    private val allowedSettingKeys = setOf(
+        "output_dir", "threads", "preferCodec", "preferAudio", "downloadMode",
+        "skipSubtitle", "skipCover", "skipAi", "skipMux", "downloadDanmaku",
+        "videoAscending", "audioAscending", "forceHttp", "batchQn",
+        "delayPerPage", "filePattern", "clearOnExit", "theme"
+    )
+
     @JavascriptInterface
     fun setSetting(reqId: Int, key: String, value: String) {
+        if (key !in allowedSettingKeys) {
+            err(reqId, "不允许修改此设置: $key")
+            return
+        }
         prefs.edit().putString(key, value).commit()
         when (key) {
             "output_dir" -> {
@@ -1901,12 +1923,26 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
             val file = File(path)
             val uri = androidx.core.content.FileProvider.getUriForFile(
                 context, "${context.packageName}.fileprovider", file)
+            // 根据文件扩展名动态设置 MIME 类型
+            val mimeType = when {
+                path.endsWith(".mp4", true) -> "video/mp4"
+                path.endsWith(".m4a", true) -> "audio/mp4"
+                path.endsWith(".flac", true) -> "audio/flac"
+                path.endsWith(".aac", true) -> "audio/aac"
+                path.endsWith(".srt", true) -> "application/x-subrip"
+                path.endsWith(".ass", true) -> "text/x-ssa"
+                path.endsWith(".xml", true) || path.endsWith(".json", true) -> "text/xml"
+                path.endsWith(".jpg", true) || path.endsWith(".jpeg", true) -> "image/jpeg"
+                path.endsWith(".png", true) -> "image/png"
+                path.endsWith(".webp", true) -> "image/webp"
+                else -> "application/octet-stream"
+            }
             val intent = Intent(Intent.ACTION_SEND).apply {
-                type = "video/mp4"
+                type = mimeType
                 putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            context.startActivity(Intent.createChooser(intent, "分享视频").apply {
+            context.startActivity(Intent.createChooser(intent, "分享文件").apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             })
             ok(reqId)

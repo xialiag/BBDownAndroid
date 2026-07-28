@@ -91,6 +91,9 @@ object DanmakuUtil {
                 if (attrs.size < 8) continue
 
                 val content = match.groupValues[2].trim()
+                    .replace("&amp;", "&").replace("&lt;", "<")
+                    .replace("&gt;", ">").replace("&quot;", "\"")
+                    .replace("&#39;", "'")
                 if (content.isEmpty()) continue
 
                 val second = attrs[0].toDoubleOrNull() ?: continue
@@ -153,9 +156,11 @@ object DanmakuUtil {
         return "$h:${String.format("%02d", m)}:${df.format(s)}"
     }
 
-    /** ASS 文本转义：换行符转为 \N */
+    /** ASS 文本转义：花括号转义 + 换行符转为 \N */
     private fun escapeAssText(text: String): String {
-        return text.replace("\n", "\\N").replace("\r", "")
+        return text.replace("\\", "\\\\")
+            .replace("{", "\\{").replace("}", "\\}")
+            .replace("\n", "\\N").replace("\r", "")
     }
 
     /** ASS 文件头（与 DotNet BBDown 完全一致） */

@@ -516,13 +516,19 @@ object BilibiliApi {
 
     private fun resolveSeasonToEp(ssId: String): String {
         val json = JSONObject(Http.get("https://api.bilibili.com/pgc/view/web/season?season_id=$ssId"))
-        return json.getJSONObject("result").getJSONArray("episodes").getJSONObject(0).getString("id")
+        val result = json.optJSONObject("result") ?: throw IllegalStateException("获取番剧信息失败(code=${json.optInt("code")})")
+        val episodes = result.optJSONArray("episodes") ?: throw IllegalStateException("番剧无剧集")
+        if (episodes.length() == 0) throw IllegalStateException("番剧无剧集")
+        return episodes.getJSONObject(0).getString("id")
     }
 
     /** 课程: 通过 season_id 获取第一个 epId（pugv API，与番剧不互通） */
     private fun resolveCheeseSeasonToEp(ssId: String): String {
         val json = JSONObject(Http.get("https://api.bilibili.com/pugv/view/web/season?season_id=$ssId"))
-        return json.getJSONObject("data").getJSONArray("episodes").getJSONObject(0).getString("id")
+        val data = json.optJSONObject("data") ?: throw IllegalStateException("获取课程信息失败(code=${json.optInt("code")})")
+        val episodes = data.optJSONArray("episodes") ?: throw IllegalStateException("课程无剧集")
+        if (episodes.length() == 0) throw IllegalStateException("课程无剧集")
+        return episodes.getJSONObject(0).getString("id")
     }
 
     /** 课程(pugv)信息获取，API: /pugv/view/web/season?ep_id=XXX
@@ -867,9 +873,9 @@ object BilibiliApi {
 
     private fun getVideoCodec(codecid: String): String {
         return when (codecid) {
-            "7" -> "AV1"
+            "13" -> "AV1"
             "12" -> "HEVC"
-            else -> "AVC"
+            else -> "AVC"  // codecid 7 = AVC (H.264)
         }
     }
 
@@ -882,8 +888,11 @@ object BilibiliApi {
             Logger.e("PlayInfo", "playurl API返回错误: code=$code, msg=$msg, 响应前200字: ${jsonStr.take(200)}")
             throw IllegalStateException("播放信息API错误(code=$code): $msg")
         }
-        val nodeName = if (jsonStr.contains("\"result\":{")) "result" else if (jsonStr.contains("\"data\":{")) "data" else null
-        val root = if (nodeName != null) root0.getJSONObject(nodeName) else root0
+        val root = when {
+            root0.has("result") -> root0.getJSONObject("result")
+            root0.has("data") -> root0.getJSONObject("data")
+            else -> root0
+        }
         val result = PlayInfo()
         if (!root.has("dash")) return result
         val dash = root.getJSONObject("dash")

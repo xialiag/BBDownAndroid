@@ -70,7 +70,7 @@ class DownloadService : Service() {
             val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
             wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "BBDown:DownloadWakeLock")
             wakeLock?.setReferenceCounted(false)
-            wakeLock?.acquire(10 * 60 * 1000L) // 10分钟超时，避免永久持有
+            wakeLock?.acquire(60 * 60 * 1000L) // 1小时超时，覆盖大部分下载场景
             Logger.i("DownloadService", "WakeLock 已获取")
         } catch (e: Exception) {
             Logger.w("DownloadService", "获取 WakeLock 失败: ${e.message}")

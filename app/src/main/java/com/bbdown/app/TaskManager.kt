@@ -120,11 +120,9 @@ object TaskManager {
                 if (remaining <= 0) {
                     try { appContext?.let { DownloadService.update(it) } } catch (_: Exception) {}
                 }
-                // 批量任务间强制 GC，降低内存峰值
+                // 批量任务间提示 GC（不阻塞线程池，让 GC 自然发生）
                 if (pendingCount.get() > 0) {
                     System.gc()
-                    Thread.sleep(200) // 给 GC 一点时间
-                    // API限速已移除，不再添加任务间延迟
                 }
             }
         }

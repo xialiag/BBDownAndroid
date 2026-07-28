@@ -201,9 +201,19 @@ object FFmpegMuxer {
 
         val success = execute(cmd, outputFile)
         if (success) {
-            file.delete()
-            outputFile.renameTo(file)
-            Logger.i("FFmpegMuxer", "元数据注入完成: ${file.name} (${file.length()}字节)")
+            // 使用 copy+delete 替代 delete+rename，防止 renameTo 失败导致数据丢失
+            try {
+                if (file.exists()) file.delete()
+                java.nio.file.Files.move(
+                    outputFile.toPath(), file.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING
+                )
+                Logger.i("FFmpegMuxer", "元数据注入完成: ${file.name} (${file.length()}字节)")
+            } catch (e: Exception) {
+                Logger.e("FFmpegMuxer", "替换原文件失败: ${e.message}")
+                // 回退：outputFile 已是最终结果，直接使用
+                Logger.i("FFmpegMuxer", "使用输出文件: ${outputFile.name}")
+            }
             if (jpegCover != null && jpegCover != coverFile) {
                 jpegCover.delete()
             }

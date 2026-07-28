@@ -42,20 +42,25 @@ object TaskStore {
                 val tmp = File(file.parentFile, file.name + ".tmp")
                 tmp.writeText(arr.toString(), Charsets.UTF_8)
                 if (file.exists()) {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        java.nio.file.Files.move(
-                            tmp.toPath(),
-                            file.toPath(),
-                            java.nio.file.StandardCopyOption.ATOMIC_MOVE,
-                            java.nio.file.StandardCopyOption.REPLACE_EXISTING
-                        )
-                    } else {
-                        file.delete()
-                        if (!tmp.renameTo(file)) {
-                            // renameTo 失败则回退到普通写入，保证最终能保存
-                            tmp.copyTo(file, overwrite = true)
-                            tmp.delete()
-                        } else { /* renameTo 成功 */ }
+                    try {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            java.nio.file.Files.move(
+                                tmp.toPath(),
+                                file.toPath(),
+                                java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                                java.nio.file.StandardCopyOption.REPLACE_EXISTING
+                            )
+                        } else {
+                            file.delete()
+                            tmp.renameTo(file)
+                        }
+                    } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+                        // ATOMIC_MOVE 不支持时回退到 copy+delete
+                        tmp.copyTo(file, overwrite = true)
+                        tmp.delete()
+                    } catch (_: Exception) {
+                        tmp.copyTo(file, overwrite = true)
+                        tmp.delete()
                     }
                 } else {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

@@ -17,8 +17,12 @@ import java.util.concurrent.ConcurrentLinkedDeque
 object Logger {
     private val logs = ConcurrentLinkedDeque<String>()
     private const val MAX_LOGS = 1000
-    private val dateFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault())
-    private val fileDateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.getDefault())
+    private val dateFormat = object : ThreadLocal<SimpleDateFormat>() {
+        override fun initialValue() = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault())
+    }
+    private val fileDateFormat = object : ThreadLocal<SimpleDateFormat>() {
+        override fun initialValue() = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.getDefault())
+    }
 
     fun d(tag: String, msg: String) {
         add("D", tag, msg)
@@ -57,7 +61,7 @@ object Logger {
     }
 
     private fun add(level: String, tag: String, msg: String) {
-        val time = dateFormat.format(Date())
+        val time = dateFormat.get()!!.format(Date())
         val entry = "[$time][$level][$tag] $msg"
         logs.addLast(entry)
         // 也输出到 logcat
