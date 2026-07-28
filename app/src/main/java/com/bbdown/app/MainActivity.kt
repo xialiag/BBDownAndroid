@@ -238,16 +238,9 @@ class MainActivity : AppCompatActivity() {
         super.onStop()
         // 应用停止时再次保存，确保数据不丢失
         TaskManager.saveAll()
-        // 如果有运行中的任务，确保前台服务已启动
-        if (TaskManager.all.any { it.isRunning }) {
-            try { DownloadService.start(this) } catch (_: Exception) {}
-        }
-        Logger.i("MainActivity", "onStop: 任务已保存，前台服务已更新")
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
+        
         // 退出时清理已完成任务（如果用户开启了该选项）
+        // 注意：必须在 onStop() 执行，onDestroy() 在应用被系统杀死时不一定调用
         try {
             val prefs = getSharedPreferences("bbdown_settings", Context.MODE_PRIVATE)
             if (prefs.getString("clearOnExit", "false") == "true") {
@@ -262,6 +255,16 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             Logger.e("MainActivity", "退出清理失败: ${e.message}")
         }
+        
+        // 如果有运行中的任务，确保前台服务已启动
+        if (TaskManager.all.any { it.isRunning }) {
+            try { DownloadService.start(this) } catch (_: Exception) {}
+        }
+        Logger.i("MainActivity", "onStop: 任务已保存，前台服务已更新")
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
         // 最终保存一次任务状态
         TaskManager.saveAll()
         Logger.i("MainActivity", "onDestroy: 任务已保存")

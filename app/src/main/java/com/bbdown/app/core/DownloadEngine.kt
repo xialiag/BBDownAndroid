@@ -239,13 +239,19 @@ object DownloadEngine {
                             )
                             vFile.delete()
                             aFile?.delete()
-                            // 混流成功后删除临时字幕文件（与原版 BBDown 一致）
-                            if (ok) {
+                            if (!ok) throw IllegalStateException("音视频合并失败")
+                            // all 模式：混流后保留 .srt 字幕文件作为独立输出（用户可能需要外部字幕）
+                            // video_only 模式：字幕已嵌入，删除临时文件
+                            if (task.downloadMode == "video_only") {
                                 for (t in subTracks) {
                                     if (t.file.exists()) t.file.delete()
                                 }
+                            } else {
+                                // all 模式：保留 .srt 文件
+                                for (t in subTracks) {
+                                    if (t.file.exists()) outputs.add(t.file.absolutePath)
+                                }
                             }
-                            if (!ok) throw IllegalStateException("音视频合并失败")
                             // 替换输出列表为最终文件
                             outputs.removeAll { it.endsWith(".vpart") || it.endsWith(".apart") }
                             outputs.add(outFile.absolutePath)

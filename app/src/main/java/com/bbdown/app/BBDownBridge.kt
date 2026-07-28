@@ -118,7 +118,7 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
             "skipCover" to "false",
             "skipAi" to "true",
             "skipMux" to "false",
-            "downloadDanmaku" to "false",
+            "downloadDanmaku" to "true",  // all 模式默认下载弹幕
             "videoAscending" to "false",
             "audioAscending" to "false",
             "forceHttp" to "false",
