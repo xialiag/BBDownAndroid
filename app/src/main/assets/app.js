@@ -328,8 +328,8 @@ function csToggle(id){
     panel.innerHTML = streams.map(s=>`
       <div class="cs-option cs-option-stream ${s.key===curVal?'sel':''}" onclick="csSelectStream('${id}','${esc(s.key)}','${esc(s.dfn+' '+(s.codecs||'')+(s.fps?' '+s.fps+'fps':''))}')">
         <div class="cos-body">
-          <div class="cos-main">${esc(s.dfn)} <span class="cos-codec">${esc((s.codecs||'').toUpperCase())}${s.fps?' <span class="cos-fps">'+esc(s.fps)+'fps</span>':''}</span></div>
-          <div class="cos-sub">${s.res?esc(s.res)+' · ':''}${s.bandwidth?s.bandwidth+'kbps':''}${s.size?' · '+s.size:''}</div>
+          <div class="cos-main"><span class="cos-dfn">${esc(s.dfn)}</span><span class="cos-codec">${esc(s.codecs||'')}${s.fps?` <span class="cos-fps">${esc(s.fps)}fps</span>`:''}</span></div>
+          <div class="cos-sub">${s.res?esc(s.res)+' · ':''}${s.bandwidth||''}${s.size?' · '+s.size:''}</div>
         </div>
         <svg class="cs-check" viewBox="0 0 14 14"><path fill="currentColor" d="M5.5 10L2 6.5l1-1L5.5 8l5-5 1 1z"/></svg>
       </div>`).join('');
@@ -3178,7 +3178,7 @@ function renderSettings(eb){
         </div>
       </div>
       <div class="compact-field">
-        <label>编码</label>
+        <label>默认编码偏好</label>
         <div class="pill-group">
           <button class="${(s.preferCodec||'avc')==='avc'?'active':''}" onclick="saveSetting('preferCodec','avc')">AVC</button>
           <button class="${(s.preferCodec||'avc')==='hevc'?'active':''}" onclick="saveSetting('preferCodec','hevc')">HEVC</button>
@@ -3186,7 +3186,7 @@ function renderSettings(eb){
         </div>
       </div>
       <div class="compact-field">
-        <label>音频</label>
+        <label>默认音频偏好</label>
         <div class="pill-group">
           <button class="${(s.preferAudio||'m4a')==='auto'?'active':''}" onclick="saveSetting('preferAudio','auto')">自动</button>
           <button class="${(s.preferAudio||'m4a')==='m4a'?'active':''}" onclick="saveSetting('preferAudio','m4a')">M4A</button>

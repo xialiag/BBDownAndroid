@@ -549,11 +549,12 @@ input::placeholder,textarea::placeholder{color:var(--fg-dim);opacity:.6}
 /* 视频流双行选项 */
 .cs-option-stream{align-items:center;padding:8px 12px}
 .cos-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
-.cos-main{font-size:13px;font-weight:500;color:var(--fg-bright);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.cos-codec{color:var(--accent);font-weight:600}
-.cos-fps{font-size:11px;color:var(--fg-dim);font-weight:400}
+.cos-main{font-size:13px;font-weight:500;color:var(--fg-bright);display:flex;align-items:center;gap:6px;overflow:hidden}
+.cos-dfn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cos-codec{color:var(--fg-bright);font-weight:600;white-space:nowrap;flex-shrink:0}
+.cos-fps{font-size:11px;color:var(--fg-dim);font-weight:400;white-space:nowrap;flex-shrink:0}
 .cos-sub{font-size:11px;color:var(--fg-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.cs-option-stream.sel .cos-main{color:var(--accent)}
+.cs-option-stream.sel .cos-dfn,.cs-option-stream.sel .cos-codec{color:var(--accent)}
 .cs-option-stream.sel .cos-sub{color:var(--accent);opacity:.7}
 
 /* ===== 药丸式选择器(编码/音频) ===== */
