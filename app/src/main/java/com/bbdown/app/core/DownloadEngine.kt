@@ -73,18 +73,21 @@ object DownloadEngine {
                 when (task.downloadMode) {
                     "subtitle_only" -> {
                         task.status = DownloadTask.STATUS_DOWNLOADING
-                        val subTracks = downloadSubtitles(task, page, workDir, task.skipAi)
+                        val baseName = buildFileName(task, page, totalPages > 1)
+                        val subTracks = downloadSubtitles(task, page, workDir, baseName, task.skipAi)
                         for (t in subTracks) outputs.add(t.file.absolutePath)
                         task.progress = baseProgress + pageWeight
                     }
                     "cover_only" -> {
                         task.status = DownloadTask.STATUS_DOWNLOADING
-                        downloadCover(task, workDir, outputs)
+                        val baseName = buildFileName(task, page, totalPages > 1)
+                        downloadCover(task, workDir, baseName, outputs)
                         task.progress = baseProgress + pageWeight
                     }
                     "danmaku_only" -> {
                         task.status = DownloadTask.STATUS_DOWNLOADING
-                        downloadDanmaku(page, workDir, outputs)
+                        val baseName = buildFileName(task, page, totalPages > 1)
+                        downloadDanmaku(page, workDir, baseName, outputs)
                         task.progress = baseProgress + pageWeight
                     }
                     else -> {
@@ -223,7 +226,7 @@ object DownloadEngine {
                             // 原版 BBDown: !SkipSubtitle && !DanmakuOnly && !CoverOnly 时均下载字幕
                             var subTracks: List<FFmpegMuxer.SubtitleTrack> = emptyList()
                             if ((task.downloadMode == "all" || task.downloadMode == "video_only") && !task.skipSubtitle) {
-                                subTracks = downloadSubtitles(task, effectivePage, workDir, task.skipAi)
+                                subTracks = downloadSubtitles(task, effectivePage, workDir, baseName, task.skipAi)
                             }
                             // 混流并写入元数据+封面+字幕（参考原版 BBDown 的 MuxAV）
                             checkMemoryBeforeMux()
@@ -287,7 +290,7 @@ object DownloadEngine {
                             // 原版 BBDown: !SkipSubtitle && !DanmakuOnly && !CoverOnly 时均下载字幕（含 audio_only）
                             var subTracks: List<FFmpegMuxer.SubtitleTrack> = emptyList()
                             if ((task.downloadMode == "all" || task.downloadMode == "audio_only" || task.downloadMode == "video_only") && !task.skipSubtitle) {
-                                subTracks = downloadSubtitles(task, effectivePage, workDir, task.skipAi)
+                                subTracks = downloadSubtitles(task, effectivePage, workDir, baseName, task.skipAi)
                             }
                             val metaTitle = if (totalPages > 1) page.title else task.title
                             val metaAlbum = if (totalPages > 1) task.title else ""
@@ -364,12 +367,12 @@ object DownloadEngine {
                         // 附加下载：封面（仅在 all 模式且元数据注入失败、跳过混流或无视频文件时单独下载）
                         if (task.downloadMode == "all" &&
                             !task.skipCover && task.pic.isNotEmpty() && task.skipMux && vFile == null) {
-                            downloadCover(task, workDir, outputs)
+                            downloadCover(task, workDir, baseName, outputs)
                         }
 
                         // 附加下载：弹幕
                         if (task.downloadMode == "all" && task.downloadDanmaku) {
-                            downloadDanmaku(effectivePage, workDir, outputs)
+                            downloadDanmaku(effectivePage, workDir, baseName, outputs)
                         }
 
                         task.progress = baseProgress + pageWeight
@@ -411,7 +414,7 @@ object DownloadEngine {
 
     // ==================== 附加资源下载 ====================
 
-    private fun downloadSubtitles(task: DownloadTask, page: PageInfo, workDir: File, skipAi: Boolean): List<FFmpegMuxer.SubtitleTrack> {
+    private fun downloadSubtitles(task: DownloadTask, page: PageInfo, workDir: File, baseName: String, skipAi: Boolean): List<FFmpegMuxer.SubtitleTrack> {
         val tracks = ArrayList<FFmpegMuxer.SubtitleTrack>()
         try {
             val subs = BilibiliApi.getSubtitles(page.aid, page.cid)
@@ -421,7 +424,7 @@ object DownloadEngine {
                 val srtContent = BilibiliApi.downloadSubtitleAsSrt(sub.subtitleUrl)
                 if (srtContent.isNotEmpty()) {
                     val lang = if (sub.lanDoc.isNotEmpty()) sub.lanDoc else sub.lan
-                    val subFile = File(workDir, sanitize(task.title) + ".${lang}.srt")
+                    val subFile = File(workDir, "$baseName.${lang}.srt")
                     subFile.writeText(srtContent, Charsets.UTF_8)
                     val (isoCode, lanDoc) = BilibiliApi.getSubtitleCode(sub.lan)
                     tracks.add(FFmpegMuxer.SubtitleTrack(
@@ -436,12 +439,12 @@ object DownloadEngine {
         return tracks
     }
 
-    private fun downloadCover(task: DownloadTask, workDir: File, outputs: ArrayList<String>) {
+    private fun downloadCover(task: DownloadTask, workDir: File, baseName: String, outputs: ArrayList<String>) {
         try {
             if (task.pic.isEmpty()) return
             val bytes = BilibiliApi.downloadCover(task.pic)
             val ext = coverExtension(bytes)
-            val coverFile = File(workDir, sanitize(task.title) + ext)
+            val coverFile = File(workDir, "$baseName$ext")
             coverFile.writeBytes(bytes)
             outputs.add(coverFile.absolutePath)
         } catch (_: Exception) {}
@@ -456,19 +459,19 @@ object DownloadEngine {
         return ".jpg"
     }
 
-    private fun downloadDanmaku(page: PageInfo, workDir: File, outputs: ArrayList<String>) {
+    private fun downloadDanmaku(page: PageInfo, workDir: File, baseName: String, outputs: ArrayList<String>) {
         try {
             val xml = BilibiliApi.getDanmakuXml(page.cid)
             if (xml.isNotEmpty()) {
                 // 转换为 ASS 格式（参考 DotNet BBDown 的 DanmakuUtil）
                 val ass = DanmakuUtil.convertXmlToAss(xml)
                 if (ass.isNotEmpty()) {
-                    val assFile = File(workDir, sanitize("P${page.index}.${page.title}") + ".danmaku.ass")
+                    val assFile = File(workDir, "$baseName.danmaku.ass")
                     assFile.writeText(ass, Charsets.UTF_8)
                     outputs.add(assFile.absolutePath)
                 }
                 // 同时保存原始 XML（供其他工具使用）
-                val danmakuFile = File(workDir, sanitize("P${page.index}.${page.title}") + ".danmaku.xml")
+                val danmakuFile = File(workDir, "$baseName.danmaku.xml")
                 danmakuFile.writeText(xml, Charsets.UTF_8)
                 outputs.add(danmakuFile.absolutePath)
             }
