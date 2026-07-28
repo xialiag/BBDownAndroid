@@ -481,24 +481,54 @@ object DownloadEngine {
     // ==================== 选轨逻辑 ====================
 
     private fun selectVideo(play: PlayInfo, qn: String, preferCodec: String, ascending: Boolean): VideoTrack? {
-        val byCodec = play.videos.filter { it.codecs.equals(preferCodec, true) }
-        val pool = if (byCodec.isNotEmpty()) byCodec else play.videos
-        val byQn = pool.filter { it.id == qn }
-        val candidates = if (byQn.isNotEmpty()) byQn else pool
-        return if (ascending) candidates.minByOrNull { it.bandwidth }
-               else candidates.maxByOrNull { it.bandwidth }
+        val vs = play.videos
+        if (vs.isEmpty()) return null
+        // 1. 精确匹配 codec + 质量
+        val exact = vs.find { it.codecs.equals(preferCodec, true) && it.id == qn }
+        if (exact != null) { Logger.i("DownloadEngine", "视频选择: 精确匹配 ${exact.dfn}/${exact.codecs}/${exact.res}"); return exact }
+        // 2. 匹配 codec，质量回退到最接近的（升序取较低，降序取较高）
+        val byCodec = vs.filter { it.codecs.equals(preferCodec, true) }.sortedBy { it.id.toIntOrNull() ?: 0 }
+        if (byCodec.isNotEmpty()) {
+            val qnInt = qn.toIntOrNull() ?: 0
+            val chosen = if (ascending) {
+                byCodec.lastOrNull { (it.id.toIntOrNull() ?: 0) <= qnInt } ?: byCodec.firstOrNull()
+            } else {
+                byCodec.firstOrNull { (it.id.toIntOrNull() ?: 0) >= qnInt } ?: byCodec.lastOrNull()
+            }
+            if (chosen != null) { Logger.i("DownloadEngine", "视频选择: 编码匹配回退 ${chosen.dfn}/${chosen.codecs}/${chosen.res}"); return chosen }
+        }
+        // 3. 不匹配 codec，质量回退（选最接近的较高质量）
+        val sorted = vs.sortedBy { it.id.toIntOrNull() ?: 0 }
+        val qnInt = qn.toIntOrNull() ?: 0
+        val fallback = if (ascending) {
+            sorted.lastOrNull { (it.id.toIntOrNull() ?: 0) <= qnInt } ?: sorted.firstOrNull()
+        } else {
+            sorted.firstOrNull { (it.id.toIntOrNull() ?: 0) >= qnInt } ?: sorted.lastOrNull()
+        }
+        if (fallback != null) { Logger.i("DownloadEngine", "视频选择: 质量回退 ${fallback.dfn}/${fallback.codecs}/${fallback.res}"); return fallback }
+        // 4. 兜底
+        val fallbackAll = if (ascending) vs.minByOrNull { it.bandwidth } else vs.maxByOrNull { it.bandwidth }
+        Logger.i("DownloadEngine", "视频选择: 兜底 ${fallbackAll?.dfn}/${fallbackAll?.codecs}")
+        return fallbackAll
     }
 
     private fun selectAudio(play: PlayInfo, prefer: String, ascending: Boolean): AudioTrack? {
         if (play.audios.isEmpty()) return null
+        // 1. 精确匹配编码
         val pref = when (prefer.uppercase()) {
             "FLAC" -> play.audios.filter { it.codecs == "FLAC" }
             "M4A" -> play.audios.filter { it.codecs == "M4A" }
-            else -> play.audios
+            else -> emptyList()
         }
-        val pool = if (pref.isNotEmpty()) pref else play.audios
-        return if (ascending) pool.minByOrNull { it.bandwidth }
-               else pool.maxByOrNull { it.bandwidth }
+        if (pref.isNotEmpty()) {
+            val chosen = if (ascending) pref.minByOrNull { it.bandwidth } else pref.maxByOrNull { it.bandwidth }
+            Logger.i("DownloadEngine", "音频选择: 编码匹配 ${chosen?.codecs}/${chosen?.bandwidth}kbps")
+            return chosen
+        }
+        // 2. 无匹配编码，选最高质量
+        val fallback = if (ascending) play.audios.minByOrNull { it.bandwidth } else play.audios.maxByOrNull { it.bandwidth }
+        Logger.i("DownloadEngine", "音频选择: 编码回退 ${fallback?.codecs}/${fallback?.bandwidth}kbps")
+        return fallback
     }
 
     // ==================== 文件命名 ====================

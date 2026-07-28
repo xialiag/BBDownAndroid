@@ -974,6 +974,80 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
         }
     }
 
+    /**
+     * 获取指定 URL 实际可用的流信息（用于下载前预览选择）。
+     * 返回格式:
+     * {
+     *   title: "视频标题",
+     *   videos: [{dfn, codecs, res, fps, bandwidth, size, id}],
+     *   audios: [{id, codecs, bandwidth}],
+     *   subtitles: [{lan,lanDoc}],
+     *   pages: [{index, title, cid}]
+     * }
+     */
+    @JavascriptInterface
+    fun getAvailableStreams(reqId: Int, url: String) {
+        executor.execute {
+            try {
+                val parsed = BilibiliApi.parseUrl(url)
+                val info = BilibiliApi.getVideoInfo(parsed)
+                val isBangumi = parsed.epId.isNotEmpty() && parsed.type != "cheese"
+                val isCheese = parsed.type == "cheese"
+                val firstPage = info.pages.firstOrNull() ?: PageInfo(index = 1, aid = parsed.aid, cid = "", epid = parsed.epId)
+                val play = BilibiliApi.getPlayInfo(firstPage.aid, firstPage.cid, firstPage.epid, isBangumi, isCheese = isCheese)
+
+                val j = JSONObject()
+                j.put("title", info.title)
+                j.put("totalPages", info.pages.size)
+
+                // 去重视频流：按 dfn + codecs 去重，保留带宽最高的
+                val videoMap = LinkedHashMap<String, com.bbdown.app.core.VideoTrack>()
+                for (v in play.videos) {
+                    val key = "${v.dfn}_${v.codecs}"
+                    val existing = videoMap[key]
+                    if (existing == null || v.bandwidth > existing.bandwidth) {
+                        videoMap[key] = v
+                    }
+                }
+                val vs = JSONArray()
+                for (v in videoMap.values.sortedByDescending { it.id.toIntOrNull() ?: 0 }) {
+                    val vj = JSONObject()
+                    vj.put("id", v.id); vj.put("dfn", v.dfn); vj.put("codecs", v.codecs)
+                    vj.put("bandwidth", v.bandwidth); vj.put("res", v.res); vj.put("fps", v.fps)
+                    vj.put("size", v.size)
+                    vs.put(vj)
+                }
+
+                // 去重音频流：按 codecs 去重，保留带宽最高的
+                val audioMap = LinkedHashMap<String, com.bbdown.app.core.AudioTrack>()
+                for (a in play.audios) {
+                    val existing = audioMap[a.codecs]
+                    if (existing == null || a.bandwidth > existing.bandwidth) {
+                        audioMap[a.codecs] = a
+                    }
+                }
+                val as_ = JSONArray()
+                for (a in audioMap.values.sortedByDescending { it.bandwidth }) {
+                    val aj = JSONObject()
+                    aj.put("id", a.id); aj.put("codecs", a.codecs); aj.put("bandwidth", a.bandwidth)
+                    as_.put(aj)
+                }
+
+                // 分P列表
+                val pages = JSONArray()
+                for (p in info.pages) {
+                    val pj = JSONObject()
+                    pj.put("index", p.index); pj.put("title", p.title); pj.put("cid", p.cid)
+                    pages.put(pj)
+                }
+
+                j.put("videos", vs); j.put("audios", as_)
+                j.put("pages", pages); j.put("dur", play.dur)
+                ok(reqId, j)
+            } catch (e: Exception) { err(reqId, "获取流信息失败: ${e.message}") }
+        }
+    }
+
     @JavascriptInterface
     fun addTask(reqId: Int, taskJson: String) {
         executor.execute {
