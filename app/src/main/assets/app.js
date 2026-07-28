@@ -354,6 +354,8 @@ const state = {
   selectedQn: null,
   selectedCodec: 'avc',
   selectedAudio: 'm4a',
+  selectedVideoStream: null,  // 视频流选择器：格式 "id|codecs"，如 "116|hevc"
+  selectedAudioStream: null,  // 音频流选择器：流的 id
   batchQn: 'auto',        // 批量下载默认清晰度（auto=每个视频自动取最高可用）
   downloadMode: 'all',
   downloadDanmaku: false,
@@ -1209,14 +1211,16 @@ function renderEditor_ParseFlow(eb){
   }
   const info = state.videoInfo;
   const play = state.playInfo;
+  // 视频流列表：全部保留，用 id|codecs 作为唯一 value
   const qnList = [];
-  const seen = new Set();
+  const qnSeen = new Set();
   if(play && play.videos){
     for(const v of play.videos){
-      if(!seen.has(v.id)){ seen.add(v.id); qnList.push(v); }
+      const key = v.id + '|' + (v.codecs||'').toLowerCase();
+      if(!qnSeen.has(key)){ qnSeen.add(key); qnList.push(v); }
     }
   }
-  // 构建可用音频轨道列表（按编码+码率去重，显示所有不同码率的音轨）
+  // 音频流列表：按编码+码率去重
   const audioList = [];
   const audioSeen = new Set();
   if(play && play.audios){
@@ -1225,28 +1229,38 @@ function renderEditor_ParseFlow(eb){
       if(!audioSeen.has(key)){ audioSeen.add(key); audioList.push(a); }
     }
   }
-  // 注册自定义下拉选项
+  // 注册下拉选项
   const modeOpts = [['all','完整下载(含字幕/封面/弹幕)'],['video_only','仅视频(有声不含附加)'],['audio_only','仅音频'],['subtitle_only','仅字幕'],['cover_only','仅封面'],['danmaku_only','仅弹幕']];
   window._csOpts['sel_mode'] = modeOpts;
   window._csVal['sel_mode'] = state.downloadMode;
   window._csCallback['sel_mode'] = (v)=>{ state.downloadMode=v; renderEditor(); };
+  // 视频流下拉
   if(qnList.length){
-    const qnOpts = qnList.map(v=>[v.id, v.dfn+' '+v.codecs]);
-    window._csOpts['sel_qn'] = qnOpts;
-    window._csVal['sel_qn'] = state.selectedQn;
-    window._csCallback['sel_qn'] = (v)=>{ state.selectedQn=v; };
+    const vStreamOpts = qnList.map(v=>{
+      const key = v.id + '|' + (v.codecs||'').toLowerCase();
+      const bw = v.bandwidth ? ` ${v.bandwidth}kbps` : '';
+      const fps = v.fps ? ` ${v.fps}fps` : '';
+      const res = v.res ? ` ${v.res}` : '';
+      const label = `${v.dfn||v.id}${res} ${(v.codecs||'').toUpperCase()}${fps}${bw}`;
+      return [key, label];
+    });
+    // 默认选第一条
+    if(!state.selectedVideoStream) state.selectedVideoStream = vStreamOpts[0][0];
+    window._csOpts['sel_vstream'] = vStreamOpts;
+    window._csVal['sel_vstream'] = state.selectedVideoStream;
+    window._csCallback['sel_vstream'] = (v)=>{ state.selectedVideoStream=v; };
   }
-  // 注册音频轨道下拉（有playInfo时显示可用音轨）
+  // 音频流下拉
   if(audioList.length){
-    const audioOpts = [['auto','自动']].concat(audioList.map(a=>{
-      // bandwidth 已在 Kotlin 端除以1000转为 kbps，此处直接使用
+    const audioOpts = audioList.map(a=>{
       const bw = a.bandwidth ? ` ${a.bandwidth}kbps` : '';
-      const label = a.codecs === 'E-AC-3' ? '杜比全景声' : a.codecs;
-      return [a.codecs, label + bw];
-    }));
+      const label = (a.codecs === 'E-AC-3' ? '杜比全景声' : (a.codecs||'')) + bw;
+      return [a.id||a.codecs, label];
+    });
+    if(!state.selectedAudioStream) state.selectedAudioStream = audioOpts[0][0];
     window._csOpts['sel_audio'] = audioOpts;
-    window._csVal['sel_audio'] = state.selectedAudio;
-    window._csCallback['sel_audio'] = (v)=>{ state.selectedAudio=v; };
+    window._csVal['sel_audio'] = state.selectedAudioStream;
+    window._csCallback['sel_audio'] = (v)=>{ state.selectedAudioStream=v; state.selectedAudio=v; };
   }
   eb.innerHTML = `<div class="view">
     ${subHeader('新建下载任务', "state.parsed=null;state.videoInfo=null;state.playInfo=null;state._lastUrl='';state.batchResults=null;renderEditor()")}
@@ -1281,24 +1295,14 @@ function renderEditor_ParseFlow(eb){
       </div>
       ${(qnList.length && (state.downloadMode==='all' || state.downloadMode==='video_only')) ? `
         <div class="compact-field">
-          <label>清晰度</label>
-          ${csHTML('sel_qn', qnList.map(v=>[v.id,v.dfn+' '+v.codecs]), state.selectedQn)}
+          <label>视频流</label>
+          ${csHTML('sel_vstream', qnList.map(v=>{const key=v.id+'|'+(v.codecs||'').toLowerCase();const bw=v.bandwidth?` ${v.bandwidth}kbps`:'';const fps=v.fps?` ${v.fps}fps`:'';const res=v.res?` ${v.res}`:'';return [key,`${v.dfn||v.id}${res} ${(v.codecs||'').toUpperCase()}${fps}${bw}`];}), state.selectedVideoStream)}
         </div>
-      ` : ''}
-      ${(state.downloadMode==='all' || state.downloadMode==='video_only') ? `
-      <div class="compact-field">
-        <label>编码</label>
-        <div class="pill-group">
-          <button class="${state.selectedCodec==='avc'?'active':''}" onclick="state.selectedCodec='avc';renderEditor()">AVC</button>
-          <button class="${state.selectedCodec==='hevc'?'active':''}" onclick="state.selectedCodec='hevc';renderEditor()">HEVC</button>
-          <button class="${state.selectedCodec==='av1'?'active':''}" onclick="state.selectedCodec='av1';renderEditor()">AV1</button>
-        </div>
-      </div>
       ` : ''}
       ${(state.downloadMode==='all' || state.downloadMode==='audio_only') ? `
       <div class="compact-field">
-        <label>音频</label>
-        ${audioList.length ? csHTML('sel_audio', [['auto','自动']].concat(audioList.map(a=>{const bw=a.bandwidth?` ${a.bandwidth}kbps`:'';const lb=a.codecs==='E-AC-3'?'杜比全景声':a.codecs;return [a.codecs,lb+bw];})), state.selectedAudio) : `
+        <label>音频流</label>
+        ${audioList.length ? csHTML('sel_audio', audioList.map(a=>{const bw=a.bandwidth?` ${a.bandwidth}kbps`:'';const lb=(a.codecs==='E-AC-3'?'杜比全景声':(a.codecs||''))+bw;return [a.id||a.codecs,lb];}), state.selectedAudioStream||state.selectedAudio) : `
         <div class="pill-group">
           <button class="${state.selectedAudio==='auto'?'active':''}" onclick="state.selectedAudio='auto';renderEditor()">自动</button>
           <button class="${state.selectedAudio==='m4a'?'active':''}" onclick="state.selectedAudio='m4a';renderEditor()">M4A</button>
@@ -1357,10 +1361,6 @@ function renderBatchFlow(eb){
   }
   const okItems = results.filter(r=>r.ok);
   const failItems = results.filter(r=>!r.ok);
-  // 注册批量下载清晰度下拉（使用标准清晰度选项）
-  window._csOpts['batch_qn'] = QN_OPTIONS;
-  window._csVal['batch_qn'] = state.batchQn;
-  window._csCallback['batch_qn'] = (v)=>{ state.batchQn=v; };
   // 注册批量下载模式下拉
   const batchModeOpts = [['all','完整下载(含字幕/封面/弹幕)'],['video_only','仅视频(有声不含附加)'],['audio_only','仅音频'],['subtitle_only','仅字幕'],['cover_only','仅封面'],['danmaku_only','仅弹幕']];
   window._csOpts['batch_mode'] = batchModeOpts;
@@ -1385,21 +1385,13 @@ function renderBatchFlow(eb){
       </div>
       ${(state.downloadMode==='all' || state.downloadMode==='video_only') ? `
       <div class="compact-field">
-        <label>清晰度</label>
+        <label>视频流</label>
         ${csHTML('batch_qn', QN_OPTIONS, state.batchQn)}
-      </div>
-      <div class="compact-field">
-        <label>编码</label>
-        <div class="pill-group">
-          <button class="${state.selectedCodec==='avc'?'active':''}" onclick="state.selectedCodec='avc';renderEditor()">AVC</button>
-          <button class="${state.selectedCodec==='hevc'?'active':''}" onclick="state.selectedCodec='hevc';renderEditor()">HEVC</button>
-          <button class="${state.selectedCodec==='av1'?'active':''}" onclick="state.selectedCodec='av1';renderEditor()">AV1</button>
-        </div>
       </div>
       ` : ''}
       ${(state.downloadMode==='all' || state.downloadMode==='audio_only') ? `
       <div class="compact-field">
-        <label>音频</label>
+        <label>音频流</label>
         <div class="pill-group">
           <button class="${state.selectedAudio==='auto'?'active':''}" onclick="state.selectedAudio='auto';renderEditor()">自动</button>
           <button class="${state.selectedAudio==='m4a'?'active':''}" onclick="state.selectedAudio='m4a';renderEditor()">M4A</button>
@@ -1450,9 +1442,9 @@ async function doBatchDownload(){
     title: r.title,
     pic: r.pic,
     pages: r.pages.map(p=>({index:p.index,aid:p.aid,cid:p.cid,epid:p.epid,title:p.title,duration:p.duration})),
-    videoId: state.batchQn || state.selectedQn || 'auto',
+    videoId: state.batchQn || 'auto',
     preferCodec: state.selectedCodec,
-    preferAudio: state.selectedAudio,
+    preferAudio: state.selectedAudioStream || state.selectedAudio,
     downloadMode: state.downloadMode,
     downloadDanmaku: state.downloadDanmaku,
     skipMux: state.skipMux,
@@ -1530,9 +1522,9 @@ async function doDownload(){
   const commonOpts = {
     url: state._lastUrl||'',
     pic: state.videoInfo.pic,
-    videoId: state.selectedQn||'80',
-    preferCodec: state.selectedCodec,
-    preferAudio: state.selectedAudio,
+    videoId: state.selectedVideoStream ? state.selectedVideoStream.split('|')[0] : (state.selectedQn||'80'),
+    preferCodec: state.selectedVideoStream ? state.selectedVideoStream.split('|')[1] : state.selectedCodec,
+    preferAudio: state.selectedAudioStream || state.selectedAudio,
     downloadMode: state.downloadMode,
     downloadDanmaku: state.downloadDanmaku,
     skipMux: state.skipMux,
