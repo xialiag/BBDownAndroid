@@ -59,15 +59,21 @@ cd BBDownAndroid
 #   ffmpeg-kit-full-v8.aar  → FFmpeg 8.x
 #   ffmpeg-kit-full.aar     → 向后兼容（视为 v6）
 
-# 构建（默认 FFmpeg 6.x）
+# 构建（推荐：一键构建两个 FFmpeg 版本，自动拷贝产物到 dist/）
+./build-apk.sh all release
+# 或单个版本
 ./build-apk.sh 6 release
+./build-apk.sh 8 debug
 
-# 或使用 Gradle 直接构建
+# 或使用 Gradle 直接构建（注意：两次构建会互相清理 apk 目录，产物需及时拷贝）
 ./gradlew assembleRelease -PffmpegVersion=6
 ./gradlew assembleRelease -PffmpegVersion=8
 ```
 
-详细的环境搭建说明见 [ENVIRONMENT_SETUP.md](ENVIRONMENT_SETUP.md)。
+详细的环境搭建说明（Windows 原生 / Linux x86_64 / Linux ARM64）见
+[ENVIRONMENT_SETUP.md](ENVIRONMENT_SETUP.md)，
+平台笔记见 [DEV_ENV_NOTES.md](DEV_ENV_NOTES.md)（Windows）与
+[DEV_ENV_NOTES_LINUX_ARM64.md](DEV_ENV_NOTES_LINUX_ARM64.md)（Linux ARM64）。
 
 ## 使用说明
 

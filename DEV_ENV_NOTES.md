@@ -27,22 +27,20 @@
 
 本机 WinINET 代理为 `127.0.0.1:7897`（Clash/Mihomo 类）。`Invoke-WebRequest` 自动用此代理，但 **git 和 Java/Gradle 默认走 WinHTTP（直连）会被阻断**。处理：
 
-- **Gradle 构建**：`gradle.properties` 已写入
+- **Gradle 构建**：`gradle.properties` 中的代理配置**默认已注释**（为兼容无代理的 Linux 环境），Windows 构建前需取消注释：
   ```
   systemProp.http.proxyHost=127.0.0.1
   systemProp.http.proxyPort=7897
   systemProp.https.proxyHost=127.0.0.1
   systemProp.https.proxyPort=7897
   ```
-  （原仓库写的是失效的 `127.0.0.1:18080`，已替换为实际可用的 7897。）
+  若代理端口变更，同步修改。`build-apk.sh` 在 Windows 下会自动检测并提醒。
 - **Gradle Wrapper 首次下载 distro**：Wrapper 在读取 `gradle.properties` 之前就下载 distro，故需用 `GRADLE_OPTS` 传代理：
   ```
   $env:GRADLE_OPTS="-Dhttp.proxyHost=127.0.0.1 -Dhttp.proxyPort=7897 -Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=7897"
   ```
   （distr​​o 下载一次后缓存在 `~/.gradle/wrapper/dists/`，后续构建可省略此变量。）
 - **git**：已配置全局 `http.proxy`/`https.proxy = http://127.0.0.1:7897`（`~/.gitconfig`）。
-
-若代理端口变更，更新以上三处即可。
 
 ## FFmpeg AAR
 
@@ -73,16 +71,26 @@ $env:GRADLE_OPTS="-Dhttp.proxyHost=127.0.0.1 -Dhttp.proxyPort=7897 -Dhttps.proxy
 ```
 
 产物：`app\build\outputs\apk\debug\app-debug-ff6.apk` / `app-debug-ff8.apk`
-（release 在 `apk\release\`）。每次构建只保留当前版本的 APK，Gradle 会清理上一个；已验证的副本保存在项目根 `dist\`。
+（release 在 `apk\release\`）。**每次构建只保留当前版本的 APK，Gradle 会清理上一个**；请用
+`build-apk.sh` 构建（自动拷贝到 `dist\` 并重命名），或手动及时拷贝。
 
-便捷脚本 `build-apk.sh`（bash，需 Git Bash）也可用：`./build-apk.sh 6 release`。
+一键脚本 `build-apk.sh`（bash，需 Git Bash）推荐用法：
+
+```bash
+./build-apk.sh all release   # 一次构建 FFmpeg 6.x + 8.x 并拷贝到 dist/
+./build-apk.sh 6 debug       # 单个版本
+```
+
+脚本在 Windows 下自动：检查代理配置（缺失时警告）、检查 local.properties 路径、
+修复 AAR 反斜杠路径（需 python）、构建后立即拷贝到 `dist\`、自检 native 库与签名。
+产物命名：`dist\BBDown-1.9.97-ffmpeg-6.1.6-release.apk` / `-8.1.2-`。
 
 ## 对仓库做的改动（均为可逆）
 
-1. **`gradle.properties`**：删除失效代理 `127.0.0.1:18080`，替换为实际可用的 `127.0.0.1:7897`。
+1. **`gradle.properties`**：删除失效代理 `127.0.0.1:18080`，替换为实际可用的 `127.0.0.1:7897`。2026-07 起代理配置**默认注释**（兼容 Linux 无代理环境），Windows 构建前取消注释即可（见上文「代理」章节）。
 2. **`app/build.gradle`**：在 `signV1V2` 闭包顶部加 Windows 守卫——Windows 下跳过自定义 v1+v2 重签名（原任务用裸 `zip`/`apksigner`/`zipalign` 无扩展名，Windows 下 `CreateProcess` 失败；AGP 的 release signingConfig 已自带 v1+v2 且 zipalign，产物可直接安装）。Linux/macOS 行为不变。
 3. **`gradlew.bat`**：仓库仅含 bash 版 `gradlew`，从 Gradle v7.6.3 tag 补了 Windows 版 `gradlew.bat`。
-4. **`local.properties`**：新建，`sdk.dir=C:/Users/xiali/android-dev/android-sdk`。
+4. **`local.properties`**：新建，`sdk.dir=C:/Users/xiali/android-dev/android-sdk`。（注意：Linux ARM64 环境中该文件为 `sdk.dir=/opt/android-sdk`，两环境各自维护，勿混用。）
 5. **`bbdown-release.keystore`**：新建开发用自签名证书（alias=bbdown，storepass=keypass=bbdown123，RSA 2048，10000 天）。可与 `app/build.gradle` 的 signingConfig 匹配。**注意**：这是开发证书，签名与官方发布版不同，不能覆盖安装官方 APK，但全新安装无碍。
 
 ## 验证结果
