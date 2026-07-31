@@ -30,3 +30,10 @@ crash_*.txt
 *.dl
 *.vpart
 *.apart
+
+# Local build assets (ARM64 env, not part of source)
+ffmpeg-kit-src/
+ffmpeg-8.1.2-src/
+prebuilt/
+BBDown.exe
+dist/

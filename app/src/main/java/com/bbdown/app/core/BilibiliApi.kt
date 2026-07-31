@@ -764,24 +764,16 @@ object BilibiliApi {
         return parseDash(resp)
     }
 
-    /** APP 端 playurl（access_key + APP 参数，HTTP 方式） */
+    /** APP 端 playurl（gRPC 协议，移植自 BBDown AppHelper.cs） */
     private fun getPlayInfoApp(aid: String, cid: String, epid: String, isBangumi: Boolean, qn: String, isCheese: Boolean): PlayInfo {
-        val ts = (System.currentTimeMillis() / 1000).toString()
-        val sb = StringBuilder()
-        if (Http.tvToken.isNotEmpty()) sb.append("access_key=${Http.tvToken}&")
-        sb.append("appkey=4409e2ce8ffd12b8&build=7320200&cid=$cid&device=android")
-        if (isBangumi) sb.append("&ep_id=$epid&expire=0")
-        sb.append("&fnval=4048&fnver=0&fourk=1&mobi_app=android")
-        sb.append("&object_id=$aid&platform=android&playurl_type=1&qn=$qn&ts=$ts")
-        val paramStr = sb.toString()
-        val sign = tvSignMd5(paramStr)
-        var prefix = if (isBangumi) "https://api.bilibili.com/pgc/player/api/playurl?"
-                     else "https://api.bilibili.com/x/player/playurl?"
-        if (isCheese) prefix = prefix.replace("/pgc/", "/pugv/")
-        val apiUrl = "$prefix$paramStr&sign=$sign"
-        Logger.d("PlayInfo", "APP API: $apiUrl")
-        val resp = Http.get(apiUrl)
-        return parseDash(resp)
+        val encoding = if (isBangumi || isCheese) "HEVC" else "AVC"
+        val result = AppApiClient.getPlayInfo(
+            aid = aid, cid = cid, epid = epid,
+            isBangumi = isBangumi, isCheese = isCheese,
+            encoding = encoding,
+            accessKey = Http.tvToken
+        )
+        return parseDash(result.dashJson)
     }
 
     /** 国际版 playurl
@@ -1242,7 +1234,8 @@ object BilibiliApi {
         val mid: String,
         val bvidList: List<String>,
         val total: Int,
-        val videoMetas: List<CollectionVideoMeta> = emptyList()
+        val videoMetas: List<CollectionVideoMeta> = emptyList(),
+        val type: String = ""  // "season"=合集, "series"=系列
     )
 
     /** 检测视频是否属于UGC合集
@@ -1316,7 +1309,7 @@ object BilibiliApi {
                 }
             }
             Logger.i("Collection", "检测到合集: $title, ${bvidList.size}个视频")
-            return CollectionInfo(seasonId, title, mid, bvidList, bvidList.size, videoMetas)
+            return CollectionInfo(seasonId, title, mid, bvidList, bvidList.size, videoMetas, type = "season")
         } catch (e: Exception) {
             Logger.e("Collection", "检测合集失败: ${e.message}")
             return null
@@ -1516,7 +1509,7 @@ object BilibiliApi {
         while (true) {
             try {
                 val resp = Http.get(
-                    "https://api.bilibili.com/x/series/archives?mid=$mid&current_mid=$mid&series_id=$seriesId&only_normal=true&sort=desc&ps=$pageSize&pn=$pageNum&web_location=333.1387",
+                    "https://api.bilibili.com/x/series/archives?mid=$mid&current_mid=$mid&series_id=$seriesId&only_normal=true&sort=asc&ps=$pageSize&pn=$pageNum&web_location=333.1387",
                     referer = "https://space.bilibili.com/$mid/"
                 )
                 val json = JSONObject(resp)
@@ -1620,7 +1613,8 @@ object BilibiliApi {
                     mid = ownerMid,
                     bvidList = fullBvList,
                     total = fullBvList.size,
-                    videoMetas = metaList
+                    videoMetas = metaList,
+                    type = item.type  // "season"=合集, "series"=系列
                 )
             }
         }
@@ -2253,7 +2247,8 @@ object BilibiliApi {
             mid = mid,
             bvidList = finalList,
             total = finalList.size,
-            videoMetas = finalMetas
+            videoMetas = finalMetas,
+            type = item.type
         )
     }
 }

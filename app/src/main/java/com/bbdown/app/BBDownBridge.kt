@@ -37,6 +37,9 @@ import java.util.concurrent.TimeUnit
 class BBDownBridge(private val context: Context, private val webView: WebView) {
     private val executor = Executors.newCachedThreadPool()
     private val prefs = context.getSharedPreferences("bbdown_settings", Context.MODE_PRIVATE)
+    // getTasks 轮询节流时间戳：进度变化无需每秒写盘/检查服务，状态变更路径已自行保存
+    private var lastTaskSaveTime = 0L
+    private var lastServiceUpdateTime = 0L
 
     companion object {
         /** 应用私有存储默认目录（无需权限，Android 11+ 可写） */
@@ -138,7 +141,10 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
             "api_type" to "web",
             "batchQn" to "auto",
             "delayPerPage" to "0",
-            "filePattern" to ""
+            "filePattern" to "{pageTitle}",
+            "filePatternMultiPage" to "{pageTitle} P{pageNumber}",
+            "filePatternCollection" to "{collectionIndex}. {pageTitle}",
+            "filePatternCollectionMultiPage" to "{collectionIndex}. {videoTitle} P{pageNumber}"
         )
         val editor = prefs.edit()
         var changed = false
@@ -905,11 +911,13 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
                     // 分批回传进度，让 JS 端尽早渲染已完成项
                     if (chunkCount >= chunkSize || idx == urls.lastIndex) {
                         try {
+                            // 深拷贝 results，避免后台线程继续修改导致 ConcurrentModificationException
+                            val snapshot = JSONArray(results.toString())
                             val prog = JSONObject()
                             prog.put("done", idx == urls.lastIndex)
                             prog.put("processed", idx + 1)
                             prog.put("total", urls.size)
-                            prog.put("items", results)
+                            prog.put("items", snapshot)
                             webView.post {
                                 webView.evaluateJavascript(
                                     "try{window.__onBatchParseProgress && window.__onBatchParseProgress($reqId,${prog.toString()});}catch(e){}", null)
@@ -1266,6 +1274,7 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
                     forceHttp = j.optBoolean("forceHttp", false),
                     isCheese = j.optBoolean("isCheese", false),
                     collectionTitle = j.optString("collectionTitle", ""),
+                    collectionIndex = j.optInt("collectionIndex", 0),
                     upperName = j.optString("upperName", ""),
                     desc = j.optString("desc", ""),
                     pubTime = j.optLong("pubTime", 0),
@@ -1431,6 +1440,7 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
                         forceHttp = j.optBoolean("forceHttp", false),
                         isCheese = j.optBoolean("isCheese", false),
                         collectionTitle = j.optString("collectionTitle", ""),
+                        collectionIndex = j.optInt("collectionIndex", 0),
                         upperName = j.optString("upperName", ""),
                         desc = j.optString("desc", ""),
                         pubTime = j.optLong("pubTime", 0),
@@ -1453,7 +1463,9 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
         for (t in TaskManager.all) {
             val j = JSONObject()
             j.put("taskId", t.taskId); j.put("title", t.title); j.put("pic", t.pic)
-            j.put("url", t.url); j.put("status", t.status); j.put("progress", t.progress)
+            j.put("url", t.url); j.put("status", t.status)
+            // 保留 3 位小数，减小每秒轮询的 JSON 体积（前端按 Math.round(p*100) 展示）
+            j.put("progress", Math.round(t.progress * 1000f) / 1000f)
             j.put("downloadedBytes", t.downloadedBytes); j.put("totalBytes", t.totalBytes)
             j.put("speed", t.speed); j.put("errorMsg", t.errorMsg)
             j.put("pageCount", t.pages.size); j.put("outputFiles", JSONArray(t.outputFiles))
@@ -1462,9 +1474,17 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
             j.put("isRunning", t.isRunning)
             arr.put(j)
         }
-        // 定期持久化 + 更新前台服务状态
-        try { TaskStore.save() } catch (_: Exception) {}
-        try { DownloadService.update(context) } catch (_: Exception) {}
+        // 轮询节流：进度变化无需每秒写盘（断点续传由 .dl 文件负责，状态变更路径已自行保存）；
+        // 服务启停同样节流，避免批量任务间频繁 start/stop 系统调用
+        val now = System.currentTimeMillis()
+        if (now - lastTaskSaveTime >= 10_000) {
+            lastTaskSaveTime = now
+            try { TaskStore.save() } catch (_: Exception) {}
+        }
+        if (now - lastServiceUpdateTime >= 5_000) {
+            lastServiceUpdateTime = now
+            try { DownloadService.update(context) } catch (_: Exception) {}
+        }
         ok(reqId, arr)
     }
 
@@ -1827,6 +1847,7 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
                 j.put("title", collection.title)
                 j.put("mid", collection.mid)
                 j.put("total", fullList.size)
+                j.put("type", collection.type)  // "season"=合集, "series"=系列
                 val bvArr = JSONArray()
                 for (bv in fullList) bvArr.put(bv)
                 j.put("bvidList", bvArr)
@@ -2081,7 +2102,10 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
         j.put("forceHttp", prefs.getString("forceHttp", "false"))
         j.put("batchQn", prefs.getString("batchQn", "auto"))
         j.put("delayPerPage", prefs.getString("delayPerPage", "0"))
-        j.put("filePattern", prefs.getString("filePattern", ""))
+        j.put("filePattern", prefs.getString("filePattern", "{pageTitle}"))
+        j.put("filePatternMultiPage", prefs.getString("filePatternMultiPage", "{pageTitle} P{pageNumber}"))
+        j.put("filePatternCollection", prefs.getString("filePatternCollection", "{collectionIndex}. {pageTitle}"))
+        j.put("filePatternCollectionMultiPage", prefs.getString("filePatternCollectionMultiPage", "{collectionIndex}. {videoTitle} P{pageNumber}"))
         j.put("clearOnExit", prefs.getString("clearOnExit", "false"))
         ok(reqId, j)
     }
@@ -2094,7 +2118,10 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
         "theme" -> "dark"
         "batchQn" -> "auto"
         "delayPerPage" -> "0"
-        "filePattern" -> ""
+        "filePattern" -> "{pageTitle}"
+        "filePatternMultiPage" -> "{pageTitle} P{pageNumber}"
+        "filePatternCollection" -> "{collectionIndex}. {pageTitle}"
+        "filePatternCollectionMultiPage" -> "{collectionIndex}. {videoTitle} P{pageNumber}"
         "clearOnExit" -> "false"
         "output_dir" -> defaultOutputDir(context).absolutePath
         else -> ""

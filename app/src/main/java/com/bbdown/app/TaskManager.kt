@@ -27,8 +27,11 @@ object TaskManager {
     private val downloaders = ConcurrentHashMap<String, com.bbdown.app.core.MultiThreadDownloader>()
     // 全局递增序列号：确保批量下载按添加顺序执行，不因 createTime 精度不足而乱序
     private val seqCounter = AtomicLong(0)
-    // 并行下载（已解除API限速限制），支持多任务同时执行
-    private val executor = Executors.newFixedThreadPool(3, object : ThreadFactory {
+    @Volatile var outputDir: File = File("/sdcard/Download/BBDown")
+    @Volatile var threads: Int = 8
+    @Volatile var interTaskDelay: Int = 0  // 已禁用：任务间延迟（原防API风控，现已移除限制）
+    // 并行下载线程池：同时下载的文件数=threads（受内存压力动态调整）
+    private val executor = Executors.newFixedThreadPool(threads.coerceIn(1, 16), object : ThreadFactory {
         override fun newThread(r: Runnable): Thread {
             val t = Thread(r, "BBDown-DownloadWorker")
             t.isDaemon = false
@@ -40,9 +43,6 @@ object TaskManager {
             return t
         }
     })
-    @Volatile var outputDir: File = File("/sdcard/Download/BBDown")
-    @Volatile var threads: Int = 8
-    @Volatile var interTaskDelay: Int = 0  // 已禁用：任务间延迟（原防API风控，现已移除限制）
 
     private var appContext: Context? = null
     private val pendingCount = AtomicInteger(0)
@@ -55,6 +55,18 @@ object TaskManager {
     private const val HEAP_CRITICAL_RATIO = 0.90f
 
     val all: List<DownloadTask> get() = tasks.values.sortedByDescending { it.seq }
+
+    /**
+     * 是否存在未完成任务(排队/解析/下载/合并中)。
+     * 前台服务的存活判定依据：只要还有任务未终结就不退出，
+     * 避免批量下载时任务间切换的间隙导致服务被误停。
+     */
+    fun hasActiveTasks(): Boolean =
+        tasks.values.any {
+            it.status != DownloadTask.STATUS_DONE &&
+                it.status != DownloadTask.STATUS_FAILED &&
+                it.status != DownloadTask.STATUS_CANCELED
+        }
 
     fun get(id: String): DownloadTask? = tasks[id]
 
@@ -194,10 +206,7 @@ object TaskManager {
                 if (remaining <= 0) {
                     try { appContext?.let { DownloadService.update(it) } } catch (_: Exception) {}
                 }
-                // 批量任务间提示 GC（不阻塞线程池，让 GC 自然发生）
-                if (pendingCount.get() > 0) {
-                    System.gc()
-                }
+                // 批量任务间不主动 GC：ART 自适应 GC 更高效，手动调用会造成全局停顿导致 UI 卡顿
             }
         }
         return task
@@ -338,9 +347,7 @@ object TaskManager {
                 if (remaining <= 0) {
                     try { appContext?.let { DownloadService.update(it) } } catch (_: Exception) {}
                 }
-                if (pendingCount.get() > 0) {
-                    System.gc()
-                }
+                // 批量任务间不主动 GC：ART 自适应 GC 更高效，手动调用会造成全局停顿导致 UI 卡顿
             }
         }
         return task
@@ -361,7 +368,11 @@ object TaskManager {
     }
 
     fun clearFinished() {
-        val toRemove = tasks.values.filter { !it.isRunning && !it.isPaused }.map { it.taskId }
+        val toRemove = tasks.values.filter {
+            it.status == DownloadTask.STATUS_DONE ||
+            it.status == DownloadTask.STATUS_FAILED ||
+            it.status == DownloadTask.STATUS_CANCELED
+        }.map { it.taskId }
         toRemove.forEach { tasks.remove(it) }
         try { TaskStore.save() } catch (_: Exception) {}
     }
@@ -445,9 +456,7 @@ object TaskManager {
                 if (remaining <= 0) {
                     try { appContext?.let { DownloadService.update(it) } } catch (_: Exception) {}
                 }
-                if (pendingCount.get() > 0) {
-                    System.gc()
-                }
+                // 批量任务间不主动 GC：ART 自适应 GC 更高效，手动调用会造成全局停顿导致 UI 卡顿
             }
         }
         return task

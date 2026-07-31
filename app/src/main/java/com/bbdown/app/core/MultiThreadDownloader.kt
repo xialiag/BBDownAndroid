@@ -21,13 +21,21 @@ class MultiThreadDownloader(
     @Volatile var canceled = false
         private set
 
-    fun cancel() { canceled = true }
+    /** 当前活跃的分片线程，供 cancel() 中断唤醒阻塞中的 read() */
+    @Volatile private var activeJobs: List<Thread> = emptyList()
+
+    fun cancel() {
+        canceled = true
+        // 中断分片线程：阻塞在 input.read() 的线程会立即抛出，无需等待 readTimeout(60s)
+        activeJobs.forEach { it.interrupt() }
+    }
 
     /** 单个下载分片的状态 */
     private data class Segment(
         val start: Long,
         val end: Long,
-        var downloaded: Long = 0
+        // 分片线程写、断点保存线程读，加 @Volatile 保证可见性
+        @Volatile var downloaded: Long = 0
     ) {
         val size: Long get() = end - start + 1
         val isComplete: Boolean get() = downloaded >= size
@@ -82,8 +90,10 @@ class MultiThreadDownloader(
                 }
             }
             jobs.add(t)
-            t.start()
         }
+        // 注册为活跃线程，供 cancel() 中断（需在 start 前赋值，避免 cancel 与 start 的竞态窗口）
+        activeJobs = jobs
+        for (t in jobs) t.start()
 
         // 定期保存断点配置线程：每 3 秒保存一次当前进度，
         // 保证在崩溃/被系统杀死时进度不会丢失，仍可从断点继续。
@@ -109,6 +119,7 @@ class MultiThreadDownloader(
         try {
             saverThread.join()
         } catch (_: InterruptedException) {}
+        activeJobs = emptyList()
 
         if (canceled) {
             // 保存进度以便下次续传
@@ -248,9 +259,10 @@ class MultiThreadDownloader(
                     Logger.w("MultiThreadDownloader", "HTTP 403(番剧CDN拒绝HTTP)，回退HTTPS重试")
                     continue
                 }
-                if (code != HttpURLConnection.HTTP_PARTIAL && code != HttpURLConnection.HTTP_OK) {
+                // 分片请求必须返回 206：若服务器忽略 Range 返回 200 全量，非首分片会写到错误偏移导致文件损坏
+                if (code != HttpURLConnection.HTTP_PARTIAL) {
                     val errBody = try { conn.errorStream?.bufferedReader()?.use { it.readText() }?.take(500) } catch (_: Exception) { null }
-                    throw java.io.IOException("HTTP $code 下载失败${if (errBody != null) ": $errBody" else ""}")
+                    throw java.io.IOException("服务器未返回 206 Partial Content(HTTP $code)${if (errBody != null) ": $errBody" else ""}")
                 }
                 raf = RandomAccessFile(dest, "rw")
                 raf.seek(start)
@@ -265,6 +277,8 @@ class MultiThreadDownloader(
                 }
                 return  // 下载成功，退出
             } catch (e: Exception) {
+                // 取消/中断时快速退出，不再重试候选 URL
+                if (canceled) throw InterruptedException("下载已取消")
                 lastError = e
             } finally {
                 try { input?.close() } catch (_: Exception) {}
@@ -325,6 +339,8 @@ class MultiThreadDownloader(
                 }
                 return  // 下载成功，退出
             } catch (e: Exception) {
+                // 取消/中断时快速退出，不再重试候选 URL
+                if (canceled) throw InterruptedException("下载已取消")
                 lastError = e
             } finally {
                 try { input?.close() } catch (_: Exception) {}

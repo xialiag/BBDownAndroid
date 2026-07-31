@@ -94,6 +94,7 @@ class DownloadTask(
     val forceHttp: Boolean = false,
     val isCheese: Boolean = false,
     val collectionTitle: String = "",  // 合集/系列名称，非空时下载到以该名称命名的子文件夹
+    val collectionIndex: Int = 0,      // 视频在合集中的序号（1-based），用于文件命名 P{N}
     // 元数据（参考原版 BBDown，用于混流时写入 MP4）
     val upperName: String = "",       // UP主名称 → artist
     val desc: String = "",            // 视频描述 → description
@@ -101,11 +102,12 @@ class DownloadTask(
     val bvid: String = "",            // BV号（用于文件名变量 <bvid>）
     val ownerMid: String = "",        // UP主mid（用于文件名变量 <ownerMid>）
     @Volatile var status: Int = STATUS_PENDING,
-    var progress: Float = 0f,
-    var downloadedBytes: Long = 0,
-    var totalBytes: Long = 0,
-    var speed: Long = 0,
-    var errorMsg: String = "",
+    // 进度字段跨线程读写（分片线程写、UI/通知线程读），加 @Volatile 保证可见性
+    @Volatile var progress: Float = 0f,
+    @Volatile var downloadedBytes: Long = 0,
+    @Volatile var totalBytes: Long = 0,
+    @Volatile var speed: Long = 0,
+    @Volatile var errorMsg: String = "",
     var outputDir: String = "",
     var outputFiles: List<String> = emptyList(),
     var createTime: Long = System.currentTimeMillis() / 1000,

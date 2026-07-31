@@ -1,4 +1,4 @@
-/* ===== BBDown Android — 前端逻辑 v1.9.69 ===== */
+/* ===== BBDown Android — 前端逻辑 v1.9.95 ===== */
 /* 包含: 扫码登录、批量下载、多线程下载、任务管理、调试日志 */
 
 /* ---------- 原生桥接 Promise 封装 ---------- */
@@ -301,9 +301,12 @@ function csHTML(id, options, currentVal){
   </div>`;
 }
 /** 视频流专用下拉：按钮显示简短标签，展开后双行布局 */
+function csStreamShortLabel(s){
+  return [s.dfn, s.codecs, s.fps?s.fps+'fps':''].filter(x=>x).join(' ');
+}
 function csStreamHTML(id, streams, currentVal){
   const cur = streams.find(s=>s.key===currentVal);
-  const shortLabel = cur ? `${cur.dfn} ${cur.codecs}${cur.fps?' '+cur.fps+'fps':''}` : (streams.length?`${streams[0].dfn} ${streams[0].codecs}`:'');
+  const shortLabel = cur ? csStreamShortLabel(cur) : (streams.length?csStreamShortLabel(streams[0]):'');
   window._csStreamData = window._csStreamData||{};
   window._csStreamData[id] = streams;
   return `<div class="cs-wrap" data-cs="${id}" data-cs-stream="1">
@@ -325,14 +328,23 @@ function csToggle(id){
   if(isStream){
     const streams = (window._csStreamData||{})[id]||[];
     const curVal = window._csVal[id];
-    panel.innerHTML = streams.map(s=>`
-      <div class="cs-option cs-option-stream ${s.key===curVal?'sel':''}" onclick="csSelectStream('${id}','${esc(s.key)}','${esc(s.dfn+' '+(s.codecs||'')+(s.fps?' '+s.fps+'fps':''))}')">
+    panel.innerHTML = streams.map(s=>{
+      const shortLabel = csStreamShortLabel(s);
+      // 第二行：编码 · 分辨率 · 码率 · 大小，逐段拼接避免尾部残留分隔符
+      const subParts = [];
+      if(s.codecs) subParts.push(`<span class="cos-codec">${esc(s.codecs)}</span>`);
+      if(s.res) subParts.push(esc(s.res));
+      if(s.bandwidth) subParts.push(esc(s.bandwidth));
+      if(s.size) subParts.push(esc(s.size));
+      return `
+      <div class="cs-option cs-option-stream ${s.key===curVal?'sel':''}" onclick="csSelectStream('${id}','${esc(s.key)}','${esc(shortLabel)}')">
         <div class="cos-body">
-          <div class="cos-main"><span class="cos-dfn">${esc(s.dfn)}</span><span class="cos-codec">${esc(s.codecs||'')}${s.fps?` <span class="cos-fps">${esc(s.fps)}fps</span>`:''}</span></div>
-          <div class="cos-sub">${s.res?esc(s.res)+' · ':''}${s.bandwidth||''}${s.size?' · '+s.size:''}</div>
+          <div class="cos-main"><span class="cos-dfn">${esc(s.dfn)}</span>${s.fps?`<span class="cos-fps">${esc(s.fps)}fps</span>`:''}</div>
+          <div class="cos-sub">${subParts.join(' · ')}</div>
         </div>
         <svg class="cs-check" viewBox="0 0 14 14"><path fill="currentColor" d="M5.5 10L2 6.5l1-1L5.5 8l5-5 1 1z"/></svg>
-      </div>`).join('');
+      </div>`;
+    }).join('');
   } else {
     const opts = window._csOpts[id];
     if(!opts) return;
@@ -397,7 +409,10 @@ const state = {
   skipAi: true,
   videoAscending: false,
   audioAscending: false,
-  filePattern: '',
+  filePattern: '{pageTitle}',
+  filePatternMultiPage: '{pageTitle} P{pageNumber}',
+  filePatternCollection: '{collectionIndex}. {pageTitle}',
+  filePatternCollectionMultiPage: '{collectionIndex}. {videoTitle} P{pageNumber}',
   forceHttp: false,
   delayPerPage: 0,         // 合集/批量下载时分P间隔(秒)
   showAdvanced: false,
@@ -413,6 +428,7 @@ const state = {
   _favTotal: 0,
   // 合集检测
   _collectionInfo: null,
+  _collectionType: '',  // "season"=合集, "series"=系列
   _collectionLoading: false,
   _collectionVideos: null,
   // UP主搜索
@@ -443,6 +459,7 @@ const state = {
   settings: {},
   _lastUrl: '',
   _pollTimer: null,
+  _tasksStatusSig: '', // 状态签名（任务状态分布，用于检测分类成员变化）
   _loginInfo: null,
   _taskFilter: 'all', // 'all' | 'running' | 'done' | 'failed'
   _taskManageMode: false, // 任务管理模式
@@ -466,6 +483,22 @@ const QN_OPTIONS = [
   ['116','1080P 高帧率'], ['112','1080P 高码率'], ['80','1080P 高清'],
   ['74','720P 高帧率'], ['64','720P 高清'], ['32','480P 清晰'], ['16','360P 流畅']
 ];
+/* 标准清晰度对应的分辨率/帧率/说明（批量场景无 playInfo，用于结构化双行展示）
+   批量下载无法逐个预取编码/码率，故仅显示分辨率与帧率，与下载页保持一致的下拉样式 */
+const QN_STREAM_INFO = {
+  'auto': { res:'智能选择最高可用清晰度' },
+  '127':  { res:'7680×4320' },
+  '126':  { res:'3840×2160 · 杜比视界' },
+  '125':  { res:'3840×2160 · HDR' },
+  '120':  { res:'3840×2160' },
+  '116':  { res:'1920×1080', fps:'60' },
+  '112':  { res:'1920×1080' },
+  '80':   { res:'1920×1080' },
+  '74':   { res:'1280×720', fps:'60' },
+  '64':   { res:'1280×720' },
+  '32':   { res:'852×480' },
+  '16':   { res:'640×360' }
+};
 const editorBody = () => el('editorBody');
 const sidebarBody = () => el('sidebarBody');
 
@@ -520,6 +553,10 @@ function switchView(view){
   renderSidebar();
   renderEditor();
   if(view==='account') initAccountView();
+  // 切换到任务列表时立即轮询一次，确保显示最新任务状态
+  if(view === 'explorer'){
+    try { forcePollNow(); } catch(e) {}
+  }
 }
 
 /* ---------- 侧边栏渲染 ---------- */
@@ -795,6 +832,8 @@ function exitTaskManage(){
   _subnavKey = '';
   renderTaskList(sidebarBody());
   renderEditor();
+  // 退出管理模式后立即刷新任务状态
+  try { forcePollNow(); } catch(e) {}
 }
 
 /** 渲染任务列表顶部 tabs 栏：非管理模式显示分类筛选，管理模式显示管理按钮 */
@@ -932,6 +971,7 @@ async function deleteSelectedTasks(){
       state._tasks = freshTasks;
       state._tasksStructSig = '';
       state._tasksContentSig = '';
+      state._tasksStatusSig = '';
       // 同时更新侧边栏和主内容区
       renderTaskList(sidebarBody());
       renderEditor();
@@ -1236,107 +1276,102 @@ async function fetchPlayInfo(){
   }
 }
 
-function renderEditor_ParseFlow(eb){
-  if(!state.videoInfo){
-    eb.innerHTML = `<div class="view"><h1>新建下载任务</h1><div class="loading-pulse">${spinIcon()} 正在获取视频信息…</div></div>`;
-    return;
-  }
-  const info = state.videoInfo;
-  const play = state.playInfo;
-  // 视频流列表：全部保留，用 id|codecs 作为唯一 value
-  const qnList = [];
-  const qnSeen = new Set();
-  if(play && play.videos){
-    for(const v of play.videos){
-      const key = v.id + '|' + (v.codecs||'').toLowerCase();
-      if(!qnSeen.has(key)){ qnSeen.add(key); qnList.push(v); }
-    }
-  }
-  // 音频流列表：按编码+码率去重
-  const audioList = [];
-  const audioSeen = new Set();
-  if(play && play.audios){
-    for(const a of play.audios){
-      const key = a.codecs + '_' + a.bandwidth;
-      if(!audioSeen.has(key)){ audioSeen.add(key); audioList.push(a); }
-    }
-  }
-  // 注册下拉选项
-  const modeOpts = [['all','完整下载(含字幕/封面/弹幕)'],['video_only','仅视频(有声不含附加)'],['audio_only','仅音频'],['subtitle_only','仅字幕'],['cover_only','仅封面'],['danmaku_only','仅弹幕']];
-  window._csOpts['sel_mode'] = modeOpts;
-  window._csVal['sel_mode'] = state.downloadMode;
-  window._csCallback['sel_mode'] = (v)=>{ state.downloadMode=v; renderEditor(); };
-  // 视频流下拉（使用结构化双行布局）
-  if(qnList.length){
-    const vStreamData = qnList.map(v=>({
-      key: v.id + '|' + (v.codecs||'').toLowerCase(),
+/* ===== 共用：视频流数据构建 =====
+   sources: 播放信息中的视频流数组（play.videos）或标准清晰度映射
+   用 id|codecs 去重，统一返回 {key, dfn, codecs, fps, res, bandwidth, size} 结构
+*/
+function buildVStreamData(sources){
+  const seen = new Set();
+  const result = [];
+  for(const v of sources){
+    const key = v.id + '|' + (v.codecs||'').toLowerCase();
+    if(seen.has(key)) continue;
+    seen.add(key);
+    result.push({
+      key: key,
       dfn: v.dfn || v.id,
       codecs: (v.codecs||'').toUpperCase(),
       fps: v.fps || '',
       res: v.res || '',
       bandwidth: v.bandwidth ? v.bandwidth+'kbps' : '',
       size: ''
-    }));
-    if(!state.selectedVideoStream) state.selectedVideoStream = vStreamData[0].key;
+    });
+  }
+  return result;
+}
+
+/* ===== 共用：音频流数据构建 =====
+   返回 [audioOpts, audioVal] 二元组
+   sources: 播放信息中的音频流数组（play.audios），按 codecs+bandwidth 去重
+*/
+function buildAudioOpts(sources){
+  const seen = new Set();
+  const list = [];
+  for(const a of sources){
+    const key = a.codecs + '_' + a.bandwidth;
+    if(seen.has(key)) continue;
+    seen.add(key);
+    list.push(a);
+  }
+  const opts = list.map(a=>{
+    const bw = a.bandwidth ? ` ${a.bandwidth}kbps` : '';
+    const label = (a.codecs === 'E-AC-3' ? '杜比全景声' : (a.codecs||'')) + bw;
+    return [a.id||a.codecs, label];
+  });
+  return opts;
+}
+
+/* ===== 下载选项（单页/批量共用）=====
+   cfg: {
+     modeKey, modeOpts, modeCb,
+     vstreamKey, vstreamData, vstreamVal, vstreamCb,   // 视频流（可空）
+     audioKey, audioOpts, audioVal, audioCb,             // 音频流下拉（可空；为空时回退药丸按钮）
+     btnLabel, btnAction
+   }
+*/
+function registerDownloadOpts(cfg){
+  // 内容模式
+  window._csOpts[cfg.modeKey] = cfg.modeOpts;
+  window._csVal[cfg.modeKey] = state.downloadMode;
+  window._csCallback[cfg.modeKey] = cfg.modeCb;
+  // 视频流
+  if(cfg.vstreamData && cfg.vstreamData.length){
     window._csStreamData = window._csStreamData||{};
-    window._csStreamData['sel_vstream'] = vStreamData;
-    window._csVal['sel_vstream'] = state.selectedVideoStream;
-    window._csCallback['sel_vstream'] = (v)=>{ state.selectedVideoStream=v; };
+    window._csStreamData[cfg.vstreamKey] = cfg.vstreamData;
+    window._csVal[cfg.vstreamKey] = cfg.vstreamVal;
+    window._csCallback[cfg.vstreamKey] = cfg.vstreamCb;
   }
   // 音频流下拉
-  if(audioList.length){
-    const audioOpts = audioList.map(a=>{
-      const bw = a.bandwidth ? ` ${a.bandwidth}kbps` : '';
-      const label = (a.codecs === 'E-AC-3' ? '杜比全景声' : (a.codecs||'')) + bw;
-      return [a.id||a.codecs, label];
-    });
-    if(!state.selectedAudioStream) state.selectedAudioStream = audioOpts[0][0];
-    window._csOpts['sel_audio'] = audioOpts;
-    window._csVal['sel_audio'] = state.selectedAudioStream;
-    window._csCallback['sel_audio'] = (v)=>{ state.selectedAudioStream=v; state.selectedAudio=v; };
+  if(cfg.audioOpts && cfg.audioOpts.length){
+    window._csOpts[cfg.audioKey] = cfg.audioOpts;
+    window._csVal[cfg.audioKey] = cfg.audioVal;
+    window._csCallback[cfg.audioKey] = cfg.audioCb;
   }
-  eb.innerHTML = `<div class="view">
-    ${subHeader('新建下载任务', "state.parsed=null;state.videoInfo=null;state.playInfo=null;state._lastUrl='';state.batchResults=null;renderEditor()")}
-    <h1>新建下载任务</h1>
-    <div class="video-card">
-      ${info.pic ? (()=>{ const cu=imgSrc(info.pic); return cu ? `<img class="vc-cover" src="${esc(cu)}" onerror="this.style.display='none'">` : `<img class="vc-cover" data-img-url="${esc(info.pic)}" onerror="this.style.display='none'">`; })() : ''}
-      <div class="vc-body">
-        <div class="vc-title">${esc(info.title)}</div>
-        <div class="vc-meta">${info.isCheese?'课程':(info.isBangumi?'番剧':'UGC')} · ${info.pages.length}P${info.bvid?' · '+info.bvid:''}</div>
-      </div>
-    </div>
-    <div id="collectionBannerContainer">${collectionBannerHTML()}</div>
-    ${info.pages.length > 1 ? `
-      <div class="compact-row">
-        <label class="field-label" style="margin:0;white-space:nowrap">分P选择</label>
-        <span style="font-size:11px;color:var(--fg-dim)">${state.selectedPages.size}/${info.pages.length} 已选</span>
-        <button class="btn btn-sec" style="font-size:10px;padding:3px 8px;margin-left:auto" onclick="selectAllPages(true)">全选</button>
-        <button class="btn btn-sec" style="font-size:10px;padding:3px 8px" onclick="selectAllPages(false)">取消</button>
-      </div>
-      <div class="page-list">
-        ${info.pages.map(p=>`
-          <div class="page-item" data-idx="${p.index}">
-            <div class="pi-check"><input type="checkbox" class="checkbox" ${state.selectedPages.has(p.index)?'checked':''} data-idx="${p.index}"></div>
-            <div class="pi-body"><div class="pi-title">P${p.index} ${esc(p.title)}</div></div>
-          </div>`).join('')}
-      </div>
-    ` : ''}
+}
+
+function downloadOptsHTML(cfg){
+  const hasVstream = cfg.vstreamData && cfg.vstreamData.length;
+  const showVstream = hasVstream && (state.downloadMode==='all' || state.downloadMode==='video_only');
+  const showAudio = state.downloadMode==='all' || state.downloadMode==='video_only' || state.downloadMode==='audio_only';
+  const useAudioDropdown = cfg.audioOpts && cfg.audioOpts.length;
+  return `
     <div class="compact-opts">
       <div class="compact-field">
         <label>内容</label>
-        ${csHTML('sel_mode', modeOpts, state.downloadMode)}
+        ${csHTML(cfg.modeKey, cfg.modeOpts, state.downloadMode)}
       </div>
-      ${(qnList.length && (state.downloadMode==='all' || state.downloadMode==='video_only')) ? `
+      ${showVstream ? `
         <div class="compact-field">
           <label>视频流</label>
-          ${csStreamHTML('sel_vstream', (window._csStreamData||{})['sel_vstream']||[], state.selectedVideoStream)}
+          ${csStreamHTML(cfg.vstreamKey, cfg.vstreamData, cfg.vstreamVal)}
         </div>
       ` : ''}
-      ${(state.downloadMode==='all' || state.downloadMode==='audio_only') ? `
+      ${showAudio ? `
       <div class="compact-field">
         <label>音频流</label>
-        ${audioList.length ? csHTML('sel_audio', audioList.map(a=>{const bw=a.bandwidth?` ${a.bandwidth}kbps`:'';const lb=(a.codecs==='E-AC-3'?'杜比全景声':(a.codecs||''))+bw;return [a.id||a.codecs,lb];}), state.selectedAudioStream||state.selectedAudio) : `
-        <div class="pill-group">
+        ${useAudioDropdown
+          ? csHTML(cfg.audioKey, cfg.audioOpts, cfg.audioVal)
+          : `<div class="pill-group">
           <button class="${state.selectedAudio==='auto'?'active':''}" onclick="state.selectedAudio='auto';renderEditor()">自动</button>
           <button class="${state.selectedAudio==='m4a'?'active':''}" onclick="state.selectedAudio='m4a';renderEditor()">M4A</button>
           <button class="${state.selectedAudio==='flac'?'active':''}" onclick="state.selectedAudio='flac';renderEditor()">FLAC</button>
@@ -1359,17 +1394,105 @@ function renderEditor_ParseFlow(eb){
           ${(state.downloadMode==='all' || state.downloadMode==='video_only') ? `<label class="opt-item"><input type="checkbox" class="checkbox" ${state.videoAscending?'checked':''} onchange="state.videoAscending=this.checked"><span>视频升序(最小体积)</span></label>` : ''}
           ${(state.downloadMode==='all' || state.downloadMode==='audio_only') ? `<label class="opt-item"><input type="checkbox" class="checkbox" ${state.audioAscending?'checked':''} onchange="state.audioAscending=this.checked"><span>音频升序(最小体积)</span></label>` : ''}
           <label class="opt-item"><input type="checkbox" class="checkbox" ${state.forceHttp?'checked':''} onchange="state.forceHttp=this.checked"><span>强制HTTP</span></label>
-          <div class="opt-item" style="flex-direction:column;align-items:stretch;gap:4px">
-            <span style="font-size:11px">文件命名模板</span>
-            <input type="text" class="text-input" style="font-size:11px;padding:4px 8px" value="${esc(state.filePattern)}" placeholder="留空使用默认" onchange="state.filePattern=this.value">
-            <span style="font-size:10px;color:var(--fg-dim)">变量: &lt;videoTitle&gt; &lt;pageTitle&gt; &lt;pageNumber&gt; &lt;pageNumberWithZero&gt; &lt;bvid&gt; &lt;aid&gt; &lt;cid&gt; &lt;ownerName&gt; &lt;ownerMid&gt; &lt;dfn&gt; &lt;res&gt; &lt;fps&gt; &lt;videoCodecs&gt; &lt;audioCodecs&gt; &lt;publishDate&gt;</span>
-          </div>
+          ${
+            (() => {
+              if(cfg.isCollection){
+                const isSeries = state._collectionType === 'series';
+                return `
+                  <div class="opt-item" style="flex-direction:column;align-items:stretch;gap:4px">
+                    <span style="font-size:11px">${isSeries ? '单P命名模板' : '合集命名模板'}</span>
+                    <input type="text" class="text-input" style="font-size:11px;padding:4px 8px" value="${esc(isSeries ? state.filePattern : state.filePatternCollection)}" onchange="${isSeries ? "state.filePattern=this.value" : "state.filePatternCollection=this.value"}">
+                  </div>
+                  <div class="opt-item" style="flex-direction:column;align-items:stretch;gap:4px">
+                    <span style="font-size:11px">${isSeries ? '多P命名模板' : '合集多P命名模板'}</span>
+                    <input type="text" class="text-input" style="font-size:11px;padding:4px 8px" value="${esc(isSeries ? state.filePatternMultiPage : state.filePatternCollectionMultiPage)}" onchange="${isSeries ? "state.filePatternMultiPage=this.value" : "state.filePatternCollectionMultiPage=this.value"}">
+                  </div>
+                  ${filePatternVarsTable()}`;
+              } else {
+                const multiPage = state.videoInfo && state.videoInfo.pages && state.videoInfo.pages.length > 1;
+                if(multiPage){
+                  return `
+                    <div class="opt-item" style="flex-direction:column;align-items:stretch;gap:4px">
+                      <span style="font-size:11px">多P命名模板</span>
+                      <input type="text" class="text-input" style="font-size:11px;padding:4px 8px" value="${esc(state.filePatternMultiPage)}" onchange="state.filePatternMultiPage=this.value">
+                    </div>
+                    ${filePatternVarsTable()}`;
+                } else {
+                  return `
+                    <div class="opt-item" style="flex-direction:column;align-items:stretch;gap:4px">
+                      <span style="font-size:11px">单P命名模板</span>
+                      <input type="text" class="text-input" style="font-size:11px;padding:4px 8px" value="${esc(state.filePattern)}" onchange="state.filePattern=this.value">
+                    </div>
+                    ${filePatternVarsTable()}`;
+                }
+              }
+            })()
+          }
         </div>
       ` : ''}
     ` : ''}
     <div class="btn-row" style="margin-top:12px">
-      <button class="btn btn-primary btn-block" onclick="doDownload()">开始下载</button>
+      <button class="btn btn-primary btn-block" onclick="${cfg.btnAction}">${cfg.btnLabel}</button>
     </div>
+  `;
+}
+
+function renderEditor_ParseFlow(eb){
+  if(!state.videoInfo){
+    eb.innerHTML = `<div class="view"><h1>新建下载任务</h1><div class="loading-pulse">${spinIcon()} 正在获取视频信息…</div></div>`;
+    return;
+  }
+  const info = state.videoInfo;
+  const play = state.playInfo;
+  // 视频流：复用共用构建函数
+  let vStreamData = (play && play.videos) ? buildVStreamData(play.videos) : null;
+  let vstreamVal = state.selectedVideoStream;
+  if(vStreamData && vStreamData.length){
+    if(!vstreamVal) vstreamVal = vStreamData[0].key;
+    state.selectedVideoStream = vstreamVal;
+  }
+  // 音频流：复用共用构建函数
+  let audioOpts = (play && play.audios) ? buildAudioOpts(play.audios) : null;
+  let audioVal = state.selectedAudioStream;
+  if(audioOpts && audioOpts.length){
+    if(!audioVal) audioVal = audioOpts[0][0];
+    state.selectedAudioStream = audioVal;
+  }
+  // 注册并渲染共用下载选项
+  const modeOpts = [['all','完整下载(含字幕/封面/弹幕)'],['video_only','仅视频(有声不含附加)'],['audio_only','仅音频'],['subtitle_only','仅字幕'],['cover_only','仅封面'],['danmaku_only','仅弹幕']];
+  const optsCfg = {
+    modeKey: 'sel_mode', modeOpts: modeOpts,
+    modeCb: (v)=>{ state.downloadMode=v; renderEditor(); },
+    vstreamKey: 'sel_vstream', vstreamData: vStreamData, vstreamVal: vstreamVal,
+    vstreamCb: (v)=>{ state.selectedVideoStream=v; },
+    audioKey: 'sel_audio', audioOpts: audioOpts, audioVal: audioVal,
+    audioCb: (v)=>{ state.selectedAudioStream=v; state.selectedAudio=v; },
+    btnLabel: '开始下载', btnAction: 'doDownload()'
+  };
+  registerDownloadOpts(optsCfg);
+  eb.innerHTML = `<div class="view">
+    ${subHeader('新建下载任务', "state.parsed=null;state.videoInfo=null;state.playInfo=null;state._lastUrl='';state.batchResults=null;renderEditor()")}
+    <h1>新建下载任务</h1>
+    <div class="vc-list">
+      ${videoCardHTML({title:info.title, pic:info.pic, bvid:info.bvid, duration:info.duration, pubdate:info.pubTime, ownerName:info.upperName, ownerFace:info.ownerFace, officialType:info.officialType, vipType:info.vipType, vipStatus:info.vipStatus, play:info.play, danmaku:info.danmaku}, {showUpper:true})}
+    </div>
+    <div id="collectionBannerContainer">${collectionBannerHTML()}</div>
+    ${info.pages.length > 1 ? `
+      <div class="compact-row">
+        <label class="field-label" style="margin:0;white-space:nowrap">分P选择</label>
+        <span style="font-size:11px;color:var(--fg-dim)">${state.selectedPages.size}/${info.pages.length} 已选</span>
+        <button class="btn btn-sec" style="font-size:10px;padding:3px 8px;margin-left:auto" onclick="selectAllPages(true)">全选</button>
+        <button class="btn btn-sec" style="font-size:10px;padding:3px 8px" onclick="selectAllPages(false)">取消</button>
+      </div>
+      <div class="page-list">
+        ${info.pages.map(p=>`
+          <div class="page-item" data-idx="${p.index}">
+            <div class="pi-check"><input type="checkbox" class="checkbox" ${state.selectedPages.has(p.index)?'checked':''} data-idx="${p.index}"></div>
+            <div class="pi-body"><div class="pi-title">P${p.index} ${esc(p.title)}</div></div>
+          </div>`).join('')}
+      </div>
+    ` : ''}
+    ${downloadOptsHTML(optsCfg)}
   </div>`;
   eb.querySelectorAll('.page-item').forEach(n=>{
     n.onclick = (e)=>{
@@ -1394,11 +1517,33 @@ function renderBatchFlow(eb){
   }
   const okItems = results.filter(r=>r.ok);
   const failItems = results.filter(r=>!r.ok);
-  // 注册批量下载模式下拉
-  const batchModeOpts = [['all','完整下载(含字幕/封面/弹幕)'],['video_only','仅视频(有声不含附加)'],['audio_only','仅音频'],['subtitle_only','仅字幕'],['cover_only','仅封面'],['danmaku_only','仅弹幕']];
-  window._csOpts['batch_mode'] = batchModeOpts;
-  window._csVal['batch_mode'] = state.downloadMode;
-  window._csCallback['batch_mode'] = (v)=>{state.downloadMode=v;renderEditor();};
+  // 注册并渲染共用下载选项（与下载页使用同一套 registerDownloadOpts/downloadOptsHTML）
+  const modeOpts = [['all','完整下载(含字幕/封面/弹幕)'],['video_only','仅视频(有声不含附加)'],['audio_only','仅音频'],['subtitle_only','仅字幕'],['cover_only','仅封面'],['danmaku_only','仅弹幕']];
+  // 视频流：优先用 playInfo 真实流（与下载页完全一致），否则回退标准清晰度映射
+  const play = state.playInfo;
+  let batchVStreams = (play && play.videos) ? buildVStreamData(play.videos) : null;
+  if(!batchVStreams || !batchVStreams.length){
+    batchVStreams = buildVStreamData(QN_OPTIONS.map(([id,label])=>{
+      const info = QN_STREAM_INFO[id] || {};
+      return { id, dfn: label, codecs: '', fps: info.fps||'', res: info.res||'', bandwidth: '' };
+    }));
+  }
+  // 音频流：优先用 playInfo 真实流，否则回退标准选项
+  let batchAudioOpts = (play && play.audios) ? buildAudioOpts(play.audios) : null;
+  if(!batchAudioOpts || !batchAudioOpts.length){
+    batchAudioOpts = [['auto','自动（最高可用）'],['m4a','M4A'],['flac','FLAC'],['e-ac-3','E-AC-3']];
+  }
+  const optsCfg = {
+    modeKey: 'batch_mode', modeOpts: modeOpts,
+    modeCb: (v)=>{ state.downloadMode=v; renderEditor(); },
+    vstreamKey: 'batch_vstream', vstreamData: batchVStreams, vstreamVal: state.batchQn,
+    vstreamCb: (v)=>{ state.batchQn=v; },
+    audioKey: 'batch_audio', audioOpts: batchAudioOpts, audioVal: state.selectedAudio,
+    audioCb: (v)=>{ state.selectedAudio=v; renderEditor(); },
+    btnLabel: '批量下载全部', btnAction: 'doBatchDownload()',
+    isCollection: true
+  };
+  registerDownloadOpts(optsCfg);
   eb.innerHTML = `<div class="view">
     ${subHeader('批量下载', "state.batchResults=null;state._lastUrl='';state._batchCollectionTitle='';renderEditor()")}
     <h1>批量下载</h1>
@@ -1409,72 +1554,42 @@ function renderBatchFlow(eb){
       </div>
     ` : ''}
     <div class="vc-list">
-      ${okItems.map((r,i)=>videoCardHTML(r, {index:i+1, showUpper:true})).join('')}
+      ${okItems.map((r,i)=>videoCardHTML({
+        title:r.title, pic:r.pic, bvid:r.bvid, url:r.url,
+        duration:r.duration, pubdate:r.pubdate||r.pubTime||0,
+        ownerName:r.ownerName||r.upperName||r.author||'',
+        ownerFace:r.ownerFace||r.face||'',
+        officialType:r.officialType!=null?r.officialType:-1,
+        vipType:r.vipType||0, vipStatus:r.vipStatus||0,
+        play:r.play||0, danmaku:r.danmaku||0,
+        pages:r.pages
+      }, {index:i+1, showUpper:true})).join('')}
     </div>
-    <div class="compact-opts" style="margin-top:12px">
-      <div class="compact-field">
-        <label>内容</label>
-        ${csHTML('batch_mode', batchModeOpts, state.downloadMode)}
-      </div>
-      ${(state.downloadMode==='all' || state.downloadMode==='video_only') ? `
-      <div class="compact-field">
-        <label>视频流</label>
-        ${csHTML('batch_qn', QN_OPTIONS, state.batchQn)}
-      </div>
-      ` : ''}
-      ${(state.downloadMode==='all' || state.downloadMode==='audio_only') ? `
-      <div class="compact-field">
-        <label>音频流</label>
-        <div class="pill-group">
-          <button class="${state.selectedAudio==='auto'?'active':''}" onclick="state.selectedAudio='auto';renderEditor()">自动</button>
-          <button class="${state.selectedAudio==='m4a'?'active':''}" onclick="state.selectedAudio='m4a';renderEditor()">M4A</button>
-          <button class="${state.selectedAudio==='flac'?'active':''}" onclick="state.selectedAudio='flac';renderEditor()">FLAC</button>
-          <button class="${state.selectedAudio==='e-ac-3'?'active':''}" onclick="state.selectedAudio='e-ac-3';renderEditor()">E-AC-3</button>
-        </div>
-      </div>
-      ` : ''}
-    </div>
-    ${(state.downloadMode==='all' || state.downloadMode==='video_only' || state.downloadMode==='audio_only' || state.downloadMode==='subtitle_only') ? `
-      <div class="adv-toggle" onclick="state.showAdvanced=!state.showAdvanced;renderEditor()">
-        <span>${state.showAdvanced?'▼':'▶'} 高级选项</span>
-      </div>
-      ${state.showAdvanced ? `
-        <div class="opt-list compact">
-          ${state.downloadMode==='all' ? `<label class="opt-item"><input type="checkbox" class="checkbox" ${state.downloadDanmaku?'checked':''} onchange="state.downloadDanmaku=this.checked"><span>附带弹幕</span></label>` : ''}
-          ${(state.downloadMode==='all' || state.downloadMode==='video_only') ? `<label class="opt-item"><input type="checkbox" class="checkbox" ${state.skipMux?'checked':''} onchange="state.skipMux=this.checked"><span>跳过混流</span></label>` : ''}
-          ${state.downloadMode==='all' ? `<label class="opt-item"><input type="checkbox" class="checkbox" ${state.skipSubtitle?'checked':''} onchange="state.skipSubtitle=this.checked"><span>跳过字幕</span></label>` : ''}
-          ${(state.downloadMode==='all' || state.downloadMode==='video_only') ? `<label class="opt-item"><input type="checkbox" class="checkbox" ${state.skipCover?'checked':''} onchange="state.skipCover=this.checked"><span>跳过封面</span></label>` : ''}
-          ${(state.downloadMode==='all' || state.downloadMode==='subtitle_only') ? `<label class="opt-item"><input type="checkbox" class="checkbox" ${state.skipAi?'checked':''} onchange="state.skipAi=this.checked"><span>跳过AI字幕</span></label>` : ''}
-          ${(state.downloadMode==='all' || state.downloadMode==='video_only') ? `<label class="opt-item"><input type="checkbox" class="checkbox" ${state.videoAscending?'checked':''} onchange="state.videoAscending=this.checked"><span>视频升序(最小体积)</span></label>` : ''}
-          ${(state.downloadMode==='all' || state.downloadMode==='audio_only') ? `<label class="opt-item"><input type="checkbox" class="checkbox" ${state.audioAscending?'checked':''} onchange="state.audioAscending=this.checked"><span>音频升序(最小体积)</span></label>` : ''}
-          <label class="opt-item"><input type="checkbox" class="checkbox" ${state.forceHttp?'checked':''} onchange="state.forceHttp=this.checked"><span>强制HTTP</span></label>
-          <div class="opt-item" style="flex-direction:row;align-items:center;gap:8px">
-            <span style="font-size:11px;white-space:nowrap">任务间隔(秒)</span>
-            <input type="number" class="text-input" style="font-size:11px;padding:4px 8px;width:60px" value="${state.delayPerPage||0}" min="0" max="60" onchange="state.delayPerPage=parseInt(this.value)||0">
-          </div>
-          <div class="opt-item" style="flex-direction:column;align-items:stretch;gap:4px">
-            <span style="font-size:11px">文件命名模板</span>
-            <input type="text" class="text-input" style="font-size:11px;padding:4px 8px" value="${esc(state.filePattern)}" placeholder="留空使用默认" onchange="state.filePattern=this.value">
-            <span style="font-size:10px;color:var(--fg-dim)">变量: &lt;videoTitle&gt; &lt;pageTitle&gt; &lt;pageNumber&gt; &lt;pageNumberWithZero&gt; &lt;bvid&gt; &lt;aid&gt; &lt;cid&gt; &lt;ownerName&gt; &lt;ownerMid&gt; &lt;dfn&gt; &lt;res&gt; &lt;fps&gt; &lt;videoCodecs&gt; &lt;audioCodecs&gt; &lt;publishDate&gt;</span>
-          </div>
-        </div>
-      ` : ''}
-    ` : ''}
-    <div class="btn-row" style="margin-top:12px">
-      <button class="btn btn-primary btn-block" onclick="doBatchDownload()">批量下载全部</button>
-    </div>
+    ${downloadOptsHTML(optsCfg)}
   </div>`;
+}
+
+// 根据视频类型选择文件命名模板：系列用普通模板，合集用合集模板
+function getFilePattern(isMultiPage, isCollection){
+  if(isCollection && state._collectionType === 'series'){
+    return isMultiPage ? state.filePatternMultiPage : state.filePattern;
+  }
+  if(isCollection){
+    return isMultiPage ? state.filePatternCollectionMultiPage : state.filePatternCollection;
+  }
+  return isMultiPage ? state.filePatternMultiPage : state.filePattern;
 }
 
 async function doBatchDownload(){
   const okItems = state.batchResults.filter(r=>r.ok);
   if(!okItems.length){ toast('没有可下载的视频','err'); return; }
   jsLog('doBatchDownload: ' + okItems.length + ' items, mode=' + state.downloadMode + ' qn=' + state.batchQn);
-  const tasks = okItems.map(r=>({
+  const tasks = okItems.map((r, idx)=>({
     url: r.url,
     title: r.title,
     pic: r.pic,
     pages: r.pages.map(p=>({index:p.index,aid:p.aid,cid:p.cid,epid:p.epid,title:p.title,duration:p.duration})),
+    collectionIndex: r.collectionIndex || (idx + 1),
     videoId: state.batchQn || 'auto',
     preferCodec: state.selectedCodec,
     preferAudio: state.selectedAudioStream || state.selectedAudio,
@@ -1486,7 +1601,7 @@ async function doBatchDownload(){
     skipAi: state.skipAi,
     videoAscending: state.videoAscending,
     audioAscending: state.audioAscending,
-    filePattern: state.filePattern,
+    filePattern: getFilePattern(r.pages.length > 1, !!state._batchCollectionTitle),
     forceHttp: state.forceHttp,
     collectionTitle: state._batchCollectionTitle || '',
     delayPerPage: state.delayPerPage || 0,
@@ -1512,6 +1627,7 @@ async function doBatchDownload(){
     state._tasks = freshTasks;
     state._tasksStructSig = '';
     state._tasksContentSig = '';
+    state._tasksStatusSig = '';
     state.selectedTaskId = null;
     state._skipAutoSelect = true;
     switchView('explorer');
@@ -1540,7 +1656,10 @@ function applyDefaultSettings(){
   state.audioAscending = (s.audioAscending||'false')==='true';
   state.forceHttp = (s.forceHttp||'false')==='true';
   state.delayPerPage = parseInt(s.delayPerPage)||0;
-  state.filePattern = s.filePattern || '';
+  state.filePattern = s.filePattern || '{pageTitle}';
+  state.filePatternMultiPage = s.filePatternMultiPage || '{pageTitle} P{pageNumber}';
+  state.filePatternCollection = s.filePatternCollection || '{collectionIndex}. {pageTitle}';
+  state.filePatternCollectionMultiPage = s.filePatternCollectionMultiPage || '{collectionIndex}. {videoTitle} P{pageNumber}';
   state.showAdvanced = false;
   jsLog('applyDefaultSettings: mode=' + state.downloadMode + ' codec=' + state.selectedCodec +
     ' audio=' + state.selectedAudio + ' skipMux=' + state.skipMux + ' skipSub=' + state.skipSubtitle +
@@ -1582,6 +1701,7 @@ async function doDownload(){
         ...commonOpts,
         title: `${state.videoInfo.title} - P${p.index} ${p.title}`,
         pages: [{index:p.index,aid:p.aid,cid:p.cid,epid:p.epid,title:p.title,duration:p.duration}],
+        filePattern: state.filePatternMultiPage,
       }));
       await callBridge('addBatchTasks', JSON.stringify(tasks));
       toast(`已添加 ${tasks.length} 个下载任务（串行执行）`,'ok');
@@ -1604,6 +1724,7 @@ async function doDownload(){
     state._tasks = tasks;
     state._tasksStructSig = '';
     state._tasksContentSig = '';
+    state._tasksStatusSig = '';
     state.selectedTaskId = null;
     state._skipAutoSelect = true;
     switchView('explorer');
@@ -1978,7 +2099,7 @@ function videoCardHTML(v, opts){
   // 统计信息
   const metaParts = [];
   if(play) metaParts.push(`<span>播放 ${fmtCount(play)}</span>`);
-  if(danmaku) metaParts.push(`<span>弹幕 ${fmtCount(danmaku)}</span>`);
+  metaParts.push(`<span>弹幕 ${fmtCount(danmaku)}</span>`);
   const metaHtml = metaParts.length ? `<div class="vc-meta">${metaParts.join('')}</div>` : '';
 
   // checkbox — 点击卡片即可切换选中状态
@@ -2883,6 +3004,7 @@ async function checkCollectionForVideo(bvid){
     jsLog('checkCollection: ' + bvid);
     const res = await callBridge('checkCollection', bvid);
     state._collectionInfo = res;
+    state._collectionType = res.type || '';  // "season"=合集, "series"=系列
     jsLog('checkCollection result: ' + JSON.stringify(res));
   }catch(e){
     jsLog('checkCollection error: ' + e);
@@ -2915,11 +3037,12 @@ async function downloadCollection(){
     const hasFullMetas = metas.length === bvids.length && metas.every(m=>m.aid && m.cid);
     if(hasFullMetas){
       // 元数据完整，直接构建批量任务（0次额外API请求）
-      const tasks = metas.map(m=>({
+      const tasks = metas.map((m, idx)=>({
         url: m.bvid,
         title: m.title || m.bvid,
         pic: m.pic || '',
         pages: [{index:1, aid:m.aid, cid:m.cid, epid:'', title:m.title||'', duration:m.duration||0}],
+        collectionIndex: idx + 1,
         // 元数据字段（修复5）：从 CollectionVideoMeta 映射到任务字段
         upperName: m.ownerName || '',
         desc: m.desc || '',
@@ -2941,7 +3064,7 @@ async function downloadCollection(){
         skipAi: state.skipAi,
         videoAscending: state.videoAscending,
         audioAscending: state.audioAscending,
-        filePattern: state.filePattern,
+        filePattern: getFilePattern(false, true),
         forceHttp: state.forceHttp,
         collectionTitle: ci.title || '',
         delayPerPage: state.delayPerPage || 0,
@@ -2959,6 +3082,7 @@ async function downloadCollection(){
       state._tasks = freshTasks;
       state._tasksStructSig = '';
       state._tasksContentSig = '';
+      state._tasksStatusSig = '';
       state.selectedTaskId = null;
       state._skipAutoSelect = true;
       switchView('explorer');
@@ -3004,6 +3128,14 @@ async function showCollectionSelection(){
     // 直接使用 checkCollection 返回的 videoMetas（0次额外API请求）
     // 不再调用 parseBatch（会触发大量串行API请求导致412限流）
     const metas = ci.videoMetas || [];
+    // 合集API可能不返回每视频的owner信息，回退到单个视频解析的UP主信息
+    const vi = state.videoInfo || {};
+    const fallbackOwner = vi.upperName || '';
+    const fallbackFace = vi.ownerFace || '';
+    const fallbackMid = vi.ownerMid || '';
+    const fallbackOfficial = vi.officialType != null ? vi.officialType : -1;
+    const fallbackVipType = vi.vipType || 0;
+    const fallbackVipStatus = vi.vipStatus || 0;
     let results;
     if(metas.length === ci.bvidList.length && metas.some(m=>m.title)){
       // 元数据完整，直接使用
@@ -3015,18 +3147,19 @@ async function showCollectionSelection(){
         ok: true,
         pages: m.aid ? [{index:1, aid:m.aid, cid:m.cid||'', title:m.title||'', duration:m.duration||0}] : [],
         // 补全全部字段（修复2）：使合集视频卡片与其他页面统一，使用同一个 videoCardHTML
+        // 合集API可能不返回每视频的owner信息，回退到单个视频解析的UP主信息
         duration: m.duration || 0,
         pubdate: m.pubdate || 0,
-        ownerName: m.ownerName || '',
-        upperName: m.ownerName || '',   // 别名，供 doBatchDownload 字段回退使用
-        pubTime: m.pubdate || 0,         // 别名
-        ownerFace: m.ownerFace || '',
-        ownerMid: m.ownerMid || '',
+        ownerName: m.ownerName || fallbackOwner,
+        upperName: m.ownerName || fallbackOwner,
+        pubTime: m.pubdate || 0,
+        ownerFace: m.ownerFace || fallbackFace,
+        ownerMid: m.ownerMid || fallbackMid,
         play: m.play || 0,
         danmaku: m.danmaku || 0,
-        officialType: m.officialType ?? -1,
-        vipType: m.vipType || 0,
-        vipStatus: m.vipStatus || 0,
+        officialType: (m.officialType != null && m.officialType !== -1) ? m.officialType : fallbackOfficial,
+        vipType: m.vipType || fallbackVipType,
+        vipStatus: m.vipStatus || fallbackVipStatus,
         desc: m.desc || '',
       }));
     } else {
@@ -3040,18 +3173,19 @@ async function showCollectionSelection(){
             ok: true,
             pages: meta.aid ? [{index:1, aid:meta.aid, cid:meta.cid||'', title:meta.title, duration:meta.duration||0}] : [],
             // 补全全部字段（修复2）：使合集视频卡片与其他页面统一
+            // 合集API可能不返回每视频的owner信息，回退到单个视频解析的UP主信息
             duration: meta.duration || 0,
             pubdate: meta.pubdate || 0,
-            ownerName: meta.ownerName || '',
-            upperName: meta.ownerName || '',
+            ownerName: meta.ownerName || fallbackOwner,
+            upperName: meta.ownerName || fallbackOwner,
             pubTime: meta.pubdate || 0,
-            ownerFace: meta.ownerFace || '',
-            ownerMid: meta.ownerMid || '',
+            ownerFace: meta.ownerFace || fallbackFace,
+            ownerMid: meta.ownerMid || fallbackMid,
             play: meta.play || 0,
             danmaku: meta.danmaku || 0,
-            officialType: meta.officialType ?? -1,
-            vipType: meta.vipType || 0,
-            vipStatus: meta.vipStatus || 0,
+            officialType: (meta.officialType != null && meta.officialType !== -1) ? meta.officialType : fallbackOfficial,
+            vipType: meta.vipType || fallbackVipType,
+            vipStatus: meta.vipStatus || fallbackVipStatus,
             desc: meta.desc || '',
           };
         }
@@ -3060,6 +3194,13 @@ async function showCollectionSelection(){
       });
     }
     state._collectionVideos = results;
+    // 按发布时间从早到晚排序，确保 P1=最早发布的视频（还原原版BBDown行为）
+    state._collectionVideos.sort((a,b)=>(a.pubdate||a.pubTime||0)-(b.pubdate||b.pubTime||0));
+    // 按排序后顺序重新分配页码（单视频时每个视频只有1页，序号即视频在合集中的位置）
+    state._collectionVideos.forEach((v,i)=>{
+      v.collectionIndex = i + 1;
+      if(v.pages && v.pages.length === 1) v.pages[0].index = i + 1;
+    });
     // 仅在用户仍在 addtask 视图时才渲染
     if(state.currentView === 'addtask'){
       renderCollectionSelection();
@@ -3085,9 +3226,18 @@ function renderCollectionSelection(){
     <div class="vc-list">
       ${results.map((r,i)=>{
         if(!r.ok){
-          return videoCardHTML(r, {index:i+1, failed:true, errorMsg:r.error||'未知错误', checkboxData:{bvid:r.url, checked:true, onchange:'updateColSelCount()', extraClass:'col-check', disabled:true}});
+          return videoCardHTML({title:r.title||r.url, url:r.url, pic:r.pic, ok:false}, {index:i+1, failed:true, errorMsg:r.error||'未知错误', checkboxData:{bvid:r.url, checked:true, onchange:'updateColSelCount()', extraClass:'col-check', disabled:true}});
         }
-        return videoCardHTML(r, {index:i+1, showUpper:true, checkboxData:{bvid:r.url, checked:true, onchange:'updateColSelCount()', extraClass:'col-check'}});
+        return videoCardHTML({
+          title:r.title, pic:r.pic, bvid:r.bvid, url:r.url,
+          duration:r.duration, pubdate:r.pubdate||r.pubTime||0,
+          ownerName:r.ownerName||r.upperName||r.author||'',
+          ownerFace:r.ownerFace||r.face||'',
+          officialType:r.officialType!=null?r.officialType:-1,
+          vipType:r.vipType||0, vipStatus:r.vipStatus||0,
+          play:r.play||0, danmaku:r.danmaku||0,
+          pages:r.pages
+        }, {index:i+1, showUpper:true, checkboxData:{bvid:r.url, checked:true, onchange:'updateColSelCount()', extraClass:'col-check'}});
       }).join('')}
     </div>
     <div class="btn-row" style="margin-top:14px">
@@ -3118,6 +3268,11 @@ async function downloadSelectedCollection(){
   const allVideos = state._collectionVideos || [];
   const selected = allVideos.filter(r=>selectedUrls.has(r.url));
   if(selected.length === 0){ toast('未找到选中的视频','err'); return; }
+  // 重新分配连续序号，确保选中视频的 P1,P2,P3... 是连续的
+  selected.forEach((v,i)=>{
+    v.collectionIndex = i + 1;
+    if(v.pages && v.pages.length === 1) v.pages[0].index = i + 1;
+  });
   state.batchResults = selected;
   state._lastUrl = selected.map(r=>r.url).join(' ');
   // 保留合集名称用于创建子文件夹
@@ -3138,10 +3293,6 @@ function renderSettings(eb){
   window._csOpts['set_mode'] = setModeOpts;
   window._csVal['set_mode'] = s.downloadMode||'all';
   window._csCallback['set_mode'] = (v)=>{ saveSetting('downloadMode', v); state.downloadMode=v; };
-  // 注册默认清晰度下拉
-  window._csOpts['set_qn'] = QN_OPTIONS;
-  window._csVal['set_qn'] = s.batchQn||'auto';
-  window._csCallback['set_qn'] = (v)=>{ saveSetting('batchQn', v); };
   eb.innerHTML = `<div class="view">
     <h1>设置</h1>
     <div class="theme-toggle">
@@ -3178,27 +3329,6 @@ function renderSettings(eb){
         </div>
       </div>
       <div class="compact-field">
-        <label>默认编码偏好</label>
-        <div class="pill-group">
-          <button class="${(s.preferCodec||'avc')==='avc'?'active':''}" onclick="saveSetting('preferCodec','avc')">AVC</button>
-          <button class="${(s.preferCodec||'avc')==='hevc'?'active':''}" onclick="saveSetting('preferCodec','hevc')">HEVC</button>
-          <button class="${(s.preferCodec||'avc')==='av1'?'active':''}" onclick="saveSetting('preferCodec','av1')">AV1</button>
-        </div>
-      </div>
-      <div class="compact-field">
-        <label>默认音频偏好</label>
-        <div class="pill-group">
-          <button class="${(s.preferAudio||'m4a')==='auto'?'active':''}" onclick="saveSetting('preferAudio','auto')">自动</button>
-          <button class="${(s.preferAudio||'m4a')==='m4a'?'active':''}" onclick="saveSetting('preferAudio','m4a')">M4A</button>
-          <button class="${(s.preferAudio||'m4a')==='flac'?'active':''}" onclick="saveSetting('preferAudio','flac')">FLAC</button>
-          <button class="${(s.preferAudio||'m4a')==='e-ac-3'?'active':''}" onclick="saveSetting('preferAudio','e-ac-3')">E-AC-3</button>
-        </div>
-      </div>
-      <div class="compact-field">
-        <label>默认清晰度</label>
-        ${csHTML('set_qn', QN_OPTIONS, s.batchQn||'auto')}
-      </div>
-      <div class="compact-field">
         <label>默认模式</label>
         ${csHTML('set_mode', setModeOpts, s.downloadMode||'all')}
       </div>
@@ -3231,10 +3361,22 @@ function renderSettings(eb){
           <input type="number" class="text-input" style="font-size:11px;padding:4px 8px;width:60px" value="${s.delayPerPage||0}" min="0" max="60" onchange="saveSetting('delayPerPage',String(parseInt(this.value)||0))">
         </div>
         <div class="opt-item" style="flex-direction:column;align-items:stretch;gap:4px">
-          <span style="font-size:11px">文件命名模板</span>
-          <input type="text" class="text-input" style="font-size:11px;padding:4px 8px" value="${esc(s.filePattern||'')}" placeholder="留空使用默认" onchange="saveSetting('filePattern',this.value)">
-          <span style="font-size:10px;color:var(--fg-dim)">变量: &lt;videoTitle&gt; &lt;pageTitle&gt; &lt;pageNumber&gt; &lt;pageNumberWithZero&gt; &lt;bvid&gt; &lt;aid&gt; &lt;cid&gt; &lt;ownerName&gt; &lt;ownerMid&gt; &lt;dfn&gt; &lt;res&gt; &lt;fps&gt; &lt;videoCodecs&gt; &lt;audioCodecs&gt; &lt;publishDate&gt;</span>
+          <span style="font-size:11px">普通视频命名模板</span>
+          <input type="text" class="text-input" style="font-size:11px;padding:4px 8px" value="${esc(s.filePattern||'{pageTitle}')}" onchange="saveSetting('filePattern',this.value)">
         </div>
+        <div class="opt-item" style="flex-direction:column;align-items:stretch;gap:4px">
+          <span style="font-size:11px">多P视频命名模板</span>
+          <input type="text" class="text-input" style="font-size:11px;padding:4px 8px" value="${esc(s.filePatternMultiPage||'{pageTitle} P{pageNumber}')}" onchange="saveSetting('filePatternMultiPage',this.value)">
+        </div>
+        <div class="opt-item" style="flex-direction:column;align-items:stretch;gap:4px">
+          <span style="font-size:11px">合集视频命名模板</span>
+          <input type="text" class="text-input" style="font-size:11px;padding:4px 8px" value="${esc(s.filePatternCollection||'{collectionIndex}. {pageTitle}')}" onchange="saveSetting('filePatternCollection',this.value)">
+        </div>
+        <div class="opt-item" style="flex-direction:column;align-items:stretch;gap:4px">
+          <span style="font-size:11px">合集多P命名模板</span>
+          <input type="text" class="text-input" style="font-size:11px;padding:4px 8px" value="${esc(s.filePatternCollectionMultiPage||'{collectionIndex}. {videoTitle} P{pageNumber}')}" onchange="saveSetting('filePatternCollectionMultiPage',this.value)">
+        </div>
+        ${filePatternVarsTable()}
       </div>
     ` : ''}
     <div class="switch-row" style="margin-top:8px">
@@ -3714,7 +3856,9 @@ function renderHelp(eb){
     <p>· 默认下载到应用私有目录(Movies/BBDown)</p>
     <p>· 在设置中可自定义输出目录</p>
     <p>· 如需保存到公共目录，需授予「所有文件访问权限」</p>
-    <p>· 支持自定义文件命名模板(变量: videoTitle, pageNumber, pageTitle, aid, cid)</p>
+    <p>· 支持自定义文件命名模板，四种类型独立设置</p>
+    ${filePatternVarsTable()}
+    <p style="font-size:10px;color:var(--fg-dim)">默认: 单P={pageTitle} | 多P={pageTitle} P{pageNumber} | 合集={collectionIndex}. {pageTitle} | 合集多P={collectionIndex}. {videoTitle} P{pageNumber}</p>
     <h2>其他设置</h2>
     <p>· 主题: 深色 / 浅色 / 跟随系统</p>
     <p>· 下载线程数: 默认8线程加速</p>
@@ -3729,8 +3873,12 @@ function renderHelp(eb){
 function backToTaskList(){
   state.selectedTaskId = null;
   state._skipAutoSelect = true;
+  state._prevTaskStatus = null;
+  state._taskDetailSig = '';
   renderTaskList(sidebarBody());
   renderEditor();
+  // 返回列表时立即刷新任务状态
+  try { forcePollNow(); } catch(e) {}
 }
 
 /** 安卓回退键处理：返回 true 表示已处理（导航回退），返回 false 表示已在根页面 */
@@ -3816,6 +3964,7 @@ async function removeTask(id){
     state._tasks = freshTasks;
     state._tasksStructSig = '';
     state._tasksContentSig = '';
+    state._tasksStatusSig = '';
     renderTaskList(sidebarBody());
     renderEditor();
   }catch(e){ toast('删除失败','err'); }
@@ -3839,14 +3988,23 @@ async function openFile(path){
 /* ===== 轮询任务状态 ===== */
 let _pollTimeout = null;
 function startPolling(){
+  // 清除已有定时器，避免重复轮询
+  if(_pollTimeout){ clearTimeout(_pollTimeout); _pollTimeout = null; }
   pollNow();
   schedulePoll();
 }
+/** 立即执行一次轮询（用于从后台恢复、视图切换等场景） */
+async function forcePollNow(){
+  // 如果有运行中的定时器，先取消，pollNow 完成后 schedulePoll 会重新排期
+  if(_pollTimeout){ clearTimeout(_pollTimeout); _pollTimeout = null; }
+  await pollNow();
+  schedulePoll();
+}
 function schedulePoll(){
-  // 动态轮询：有运行中任务时1秒轮询，无任务时3秒，有任务但都已完成2秒
+  // 动态轮询：有运行中任务时 500ms(实时感)，无任务时 3 秒，有任务但都已完成 2 秒
   const tasks = state._tasks || [];
   const hasRunning = tasks.some(t=>t.isRunning);
-  const interval = hasRunning ? 1000 : (tasks.length > 0 ? 2000 : 3000);
+  const interval = hasRunning ? 500 : (tasks.length > 0 ? 2000 : 3000);
   _pollTimeout = setTimeout(async ()=>{
     await pollNow();
     schedulePoll();
@@ -3859,12 +4017,15 @@ async function pollNow(){
     if(state.currentView === 'explorer'){
       // 结构签名：任务ID列表（检测任务增删）
       const structSig = tasks.map(t=>t.taskId).join('|');
-      // 内容签名：状态+进度（检测状态变化）
-      const contentSig = tasks.map(t=>`${t.taskId}:${t.status}:${Math.round(t.progress*100)}`).join('|');
+      // 内容签名：状态+进度(0.1% 粒度，检测细微变化触发原地更新)
+      const contentSig = tasks.map(t=>`${t.taskId}:${t.status}:${Math.round(t.progress*1000)}`).join('|');
+      // 状态签名：仅状态分布（分类成员变化检测）
+      const statusSig = tasks.map(t=>`${t.taskId}:${t.status}`).join('|');
       if(structSig !== state._tasksStructSig){
-        // 任务列表结构变化 → 完整重渲染侧边栏
+        // 任务列表结构变化 → 完整重渲染侧边栏 + 分类计数
         state._tasksStructSig = structSig;
         state._tasksContentSig = contentSig;
+        state._tasksStatusSig = statusSig;
         // 自动选中最新的任务（跳过首次轮询和批量下载后的首次轮询，保持列表视图）
         if(state._firstPoll){
           state._firstPoll = false;
@@ -3874,12 +4035,20 @@ async function pollNow(){
         } else if(!state.selectedTaskId || !tasks.find(t=>t.taskId===state.selectedTaskId)){
           if(tasks.length>0) state.selectedTaskId = tasks[tasks.length-1].taskId;
         }
+        renderTaskTabsBar();
         renderSidebar();
         renderEditor();
       } else if(contentSig !== state._tasksContentSig){
-        // 仅状态/进度变化 → 原地更新侧边栏徽章（避免闪烁）
         state._tasksContentSig = contentSig;
-        updateSidebarBadgesInPlace(tasks);
+        // 状态变化（完成/失败/取消/暂停）会改变分类筛选的成员与计数 → 重新渲染
+        if(statusSig !== state._tasksStatusSig){
+          state._tasksStatusSig = statusSig;
+          renderTaskTabsBar();
+          renderTaskList(sidebarBody());
+        } else {
+          // 纯进度变化 → 原地更新徽章，避免闪烁
+          updateSidebarBadgesInPlace(tasks);
+        }
       }
       // 选中任务时，原地更新进度信息而非完全重渲染
       const sel = tasks.find(t=>t.taskId===state.selectedTaskId);
@@ -3888,7 +4057,9 @@ async function pollNow(){
       }
     }
     updateStatusBar(tasks);
-  }catch(e){}
+  }catch(e){
+    console.error('[pollNow] 轮询失败:', e);
+  }
 }
 
 /** 原地更新任务徽章（不重建DOM，避免闪烁）—— 同时更新侧边栏和主内容区 */
@@ -3909,8 +4080,8 @@ function updateSidebarBadgesInPlace(tasks){
         const dot = taskStatusDot(t);
         sub.innerHTML = `${dot}${t.pageCount>1?` · ${t.pageCount}P`:''}`;
       }
-      // 更新进度条覆盖层
-      const pct = Math.round((t.progress||0)*100);
+      // 更新进度条覆盖层（0.1% 粒度，慢速下载也平滑）
+      const pct = Math.round((t.progress||0)*1000)/10;
       let progBar = item.querySelector('.ti-progress');
       if(t.status===1||t.status===2||t.status===3){
         if(!progBar){
@@ -4001,6 +4172,34 @@ function updateStatusBar(tasks){
 
 /* ---------- 工具函数 ---------- */
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+// 文件命名模板变量说明表格（BBDown 原版风格）
+function filePatternVarsTable(){
+  const vars = [
+    ['{videoTitle}', '视频标题'],
+    ['{pageNumber}', '分P序号'],
+    ['{pageNumberWithZero}', '分P序号(补零)'],
+    ['{pageTitle}', '分P标题'],
+    ['{collectionIndex}', '合集/系列序号'],
+    ['{bvid}', 'BV号'],
+    ['{aid}', 'AV号'],
+    ['{cid}', '分P CID'],
+    ['{dfn}', '画质名称'],
+    ['{res}', '分辨率'],
+    ['{fps}', '帧率'],
+    ['{videoCodecs}', '视频编码'],
+    ['{videoBandwidth}', '视频码率'],
+    ['{audioCodecs}', '音频编码'],
+    ['{audioBandwidth}', '音频码率'],
+    ['{ownerName}', 'UP主名称'],
+    ['{ownerMid}', 'UP主MID'],
+    ['{publishDate}', '发布时间'],
+  ];
+  return `<div class="fp-vars-table">
+    <table><thead><tr><th>变量</th><th>说明</th></tr></thead><tbody>
+    ${vars.map(([v, d])=>`<tr><td><code>${v}</code></td><td>${d}</td></tr>`).join('')}
+    </tbody></table></div>`;
+}
 function fmtTime(t){ if(!t)return''; const d=new Date(t*1000); const p=n=>String(n).padStart(2,'0'); return `${d.getMonth()+1}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; }
 function fmtBytes(b){ b=b||0; if(b<1024)return b+' B'; if(b<1048576)return(b/1024).toFixed(1)+' KB'; if(b<1073741824)return(b/1048576).toFixed(1)+' MB'; return(b/1073741824).toFixed(2)+' GB'; }
 function fmtSpeed(s){ if(!s)return''; return fmtBytes(s)+'/s'; }
@@ -4061,9 +4260,13 @@ callBridge('getAppVersion').then(v=>{
   if(sbVer && v.versionName) sbVer.textContent = 'BBDown Android v' + v.versionName;
 }).catch(e=>{ jsLog('获取版本号失败: '+e); });
 window.addEventListener('orientationchange',()=>setTimeout(detectLayout,300));
-// 用户从系统设置返回时，自动重新检查权限状态
+// 页面可见性变化时刷新：从后台恢复时立即轮询任务状态，权限检查也一并处理
 document.addEventListener('visibilitychange',()=>{
-  if(document.visibilityState === 'visible' && (state._permCheckPending || state.currentView === 'settings')){
-    setTimeout(()=>checkStoragePermissionStatus(), 300);
+  if(document.visibilityState === 'visible'){
+    // 从后台恢复时立即轮询一次，避免任务状态卡在旧数据
+    try { forcePollNow(); } catch(e) {}
+    if(state._permCheckPending || state.currentView === 'settings'){
+      setTimeout(()=>checkStoragePermissionStatus(), 300);
+    }
   }
 });

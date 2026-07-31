@@ -12,6 +12,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.os.PowerManager
 import android.provider.Settings
 import android.view.KeyEvent
 import android.webkit.WebChromeClient
@@ -25,6 +26,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import com.bbdown.app.core.DownloadTask
 import com.bbdown.app.core.FFmpegVersion
 import com.bbdown.app.core.Logger
 import java.io.File
@@ -32,14 +34,50 @@ import java.io.File
 class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private var backPressedTime: Long = 0
+    private var didCleanOnExit = false  // 防止 onStop + onDestroy 重复清理
 
     companion object {
         private const val REQ_STORAGE = 1001
         private const val REQ_MANAGE_STORAGE = 1002
+        private const val REQ_NOTIFICATION = 1003
         private const val BACK_PRESS_INTERVAL = 2000L
 
         // 流选择器已移至 BBDownBridge.showStreamPickerDialog（原生对话框）
         // 流选择器已移至 BBDownBridge.showStreamPickerDialog（原生对话框）
+    }
+
+    /** 请求电池优化白名单（仅首次）：防止国产 ROM 在后台杀死下载服务 */
+    private fun requestBatteryOptimizationExemption() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        val prefs = getSharedPreferences("bbdown_settings", Context.MODE_PRIVATE)
+        if (prefs.getBoolean("batteryExemptAsked", false)) return
+        prefs.edit().putBoolean("batteryExemptAsked", true).apply()
+        try {
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                // 拉起系统"忽略电池优化"授权对话框
+                startActivity(Intent(
+                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:$packageName")
+                ))
+            }
+        } catch (_: Exception) {
+            // 部分 ROM 不支持该 Action，静默忽略
+        }
+    }
+
+    /** 请求通知权限（Android 13+）：前台服务通知需运行时授权 */
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(
+                    this,
+                    arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                    REQ_NOTIFICATION
+                )
+            }
+        }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -60,6 +98,11 @@ class MainActivity : AppCompatActivity() {
         // 初始化任务管理器上下文
         TaskManager.init(this)
 
+        // 请求电池优化白名单(仅首次):防止国产 ROM 杀后台导致下载中断
+        requestBatteryOptimizationExemption()
+        // 请求通知权限(Android 13+):前台服务通知需运行时授权，否则用户看不到下载进度
+        requestNotificationPermission()
+
         // 初始化默认输出目录（应用私有存储，无需权限）
         TaskManager.outputDir = File(getExternalFilesDir(Environment.DIRECTORY_MOVIES), "BBDown").apply { mkdirs() }
 
@@ -67,7 +110,31 @@ class MainActivity : AppCompatActivity() {
         TaskStore.init(this)
         val saved = TaskStore.load()
         if (saved.isNotEmpty()) {
-            TaskManager.restoreTasks(saved)
+            // 先清理已完成任务（兜底保护：退出时可能 onDestroy 未被调用导致清理失败）
+            val prefs = getSharedPreferences("bbdown_settings", Context.MODE_PRIVATE)
+            if (prefs.getString("clearOnExit", "false") == "true") {
+                val finishedCount = saved.count {
+                    it.status == DownloadTask.STATUS_DONE ||
+                    it.status == DownloadTask.STATUS_FAILED ||
+                    it.status == DownloadTask.STATUS_CANCELED
+                }
+                if (finishedCount > 0) {
+                    val cleaned = saved.filter {
+                        it.status != DownloadTask.STATUS_DONE &&
+                        it.status != DownloadTask.STATUS_FAILED &&
+                        it.status != DownloadTask.STATUS_CANCELED
+                    }
+                    TaskStore.saveDirect(cleaned)
+                    Logger.i("MainActivity", "启动清理: 移除 $finishedCount 个已完成任务")
+                    if (cleaned.isNotEmpty()) {
+                        TaskManager.restoreTasks(cleaned)
+                    }
+                } else {
+                    TaskManager.restoreTasks(saved)
+                }
+            } else {
+                TaskManager.restoreTasks(saved)
+            }
         }
 
         webView = WebView(this)
@@ -93,6 +160,100 @@ class MainActivity : AppCompatActivity() {
             domStorageEnabled = true
         }
         webView.webViewClient = object : WebViewClient() {
+            override fun shouldInterceptRequest(view: android.webkit.WebView?, request: android.webkit.WebResourceRequest?): android.webkit.WebResourceResponse? {
+                val url = request?.url?.toString() ?: return null
+                if (url.contains("index.html") && url.startsWith("file://")) {
+                    try {
+                        val original = assets.open("index.html").bufferedReader().use { it.readText() }
+                        val inject = """<script>
+(function(){
+  var _origAdd = AndroidBridge.addTask;
+  var _origBatch = AndroidBridge.addBatchTasks;
+  function fmtSz(b){if(!b||b<=0)return'';if(b>=1048576)return'~'+(b/1048576).toFixed(2)+' MB';return'~'+(b/1024).toFixed(1)+' KB';}
+  function fetchStreams(url,cb){
+    var rid=++window._bseq;
+    window._bres[rid]={resolve:function(d){cb(d);},reject:function(e){toast('获取流失败:'+e,'err');}};
+    try{AndroidBridge.getAvailableStreams(rid,url);}catch(e){toast('获取流失败:'+e,'err');}
+  }
+  function showOverlay(data,task){
+    var vids=data.videos||[],auds=data.audios||[];
+    if(!vids.length&&!auds.length){toast('无可用流','err');return;}
+    var old=document.getElementById('sp-ov');if(old)old.remove();
+    var ov=document.createElement('div');ov.id='sp-ov';
+    ov.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px 0';
+    var cd=document.createElement('div');
+    cd.style.cssText='background:var(--bg,#1a1a2e);border:1px solid var(--border,#333);border-radius:12px;padding:20px;max-width:420px;width:90%;max-height:85vh;overflow-y:auto;color:var(--fg,#e0e0e0)';
+    var h='<div style="font-size:16px;font-weight:bold;margin-bottom:16px;text-align:center">'+(data.title||'选择流')+'</div>';
+    if(vids.length){
+      h+='<div style="font-size:12px;color:var(--fg-dim,#888);margin-bottom:6px">视频流 ('+vids.length+')</div>';
+      h+='<div id="sp-vw"></div>';
+    }
+    if(auds.length){
+      h+='<div style="font-size:12px;color:var(--fg-dim,#888);margin:12px 0 6px">音频流 ('+auds.length+')</div>';
+      h+='<div id="sp-aw"></div>';
+    }
+    h+='<div style="display:flex;gap:8px;margin-top:16px">';
+    h+='<button id="sp-ok" class="btn btn-primary" style="flex:1">开始下载</button>';
+    h+='<button id="sp-no" class="btn" style="flex:1">取消</button></div>';
+    cd.innerHTML=h;ov.appendChild(cd);document.body.appendChild(ov);
+    function mkLabel(v){
+      var p=[v.dfn||''];if(v.res)p.push(v.res);p.push(v.codecs||'');if(v.fps)p.push(v.fps+'fps');p.push(v.bandwidth+'kbps');
+      var sz=v.size?v.size*(data.dur||0)/8:0;if(!sz&&v.bandwidth&&data.dur)sz=v.bandwidth*1000*data.dur/8;if(sz>0)p.push(fmtSz(sz));
+      return p.join(' | ');
+    }
+    var vOpts=vids.map(function(v){return[v.id,mkLabel(v)];});
+    var aOpts=auds.map(function(a){var p=[a.codecs||'',a.bandwidth+'kbps'];var sz=a.bandwidth&&data.dur?a.bandwidth*1000*data.dur/8:0;if(sz>0)p.push(fmtSz(sz));return[a.id,p.join(' | ')];});
+    var vid='sp_vs',aid='sp_as';
+    if(vids.length&&typeof window.csHTML==='function'){document.getElementById('sp-vw').innerHTML=window.csHTML(vid,vOpts,vOpts[0][0]);window._csOpts[vid]=vOpts;window._csVal[vid]=vOpts[0][0];}
+    if(auds.length&&typeof window.csHTML==='function'){document.getElementById('sp-aw').innerHTML=window.csHTML(aid,aOpts,aOpts[0][0]);window._csOpts[aid]=aOpts;window._csVal[aid]=aOpts[0][0];}
+    document.getElementById('sp-no').onclick=function(){ov.remove();};
+    ov.onclick=function(e){if(e.target===ov)ov.remove();};
+  }
+  AndroidBridge.addTask=function(reqId,tj){
+    try{var t=typeof tj==='string'?JSON.parse(tj):tj;}catch(e){return _origAdd.call(AndroidBridge,reqId,tj);}
+    var url=t.url||'';if(!url)return _origAdd.call(AndroidBridge,reqId,tj);
+    fetchStreams(url,function(d){
+      if(d.videos.length<=3){_origAdd.call(AndroidBridge,reqId,tj);return;}
+      showOverlay(d,t);
+      document.getElementById('sp-ok').onclick=function(){
+        var vids2=d.videos||[],auds2=d.audios||[];
+        if(vids2.length)t.videoId=window._csVal['sp_vs']||vids2[0].id;
+        if(auds2.length)t.preferAudio=window._csVal['sp_as']||auds2[0].id;
+        document.getElementById('sp-ov').remove();
+        _origAdd.call(AndroidBridge,reqId,JSON.stringify(t));
+      };
+    });
+  };
+  if(_origBatch){
+    AndroidBridge.addBatchTasks=function(reqId,tj){
+      try{var tasks=typeof tj==='string'?JSON.parse(tj):tj;}catch(e){return _origBatch.call(AndroidBridge,reqId,tj);}
+      if(!tasks.length)return _origBatch.call(AndroidBridge,reqId,tj);
+      fetchStreams(tasks[0].url||'',function(d){
+        if(d.videos.length<=3){_origBatch.call(AndroidBridge,reqId,tj);return;}
+        showOverlay(d,tasks[0]);
+        document.getElementById('sp-ok').onclick=function(){
+          var vids2=d.videos||[],auds2=d.audios||[];
+          var vid2=vids2.length?(window._csVal['sp_vs']||vids2[0].id):'';
+          var aid2=auds2.length?(window._csVal['sp_as']||auds2[0].id):'';
+          var upd=tasks.map(function(tk){tk.videoId=vid2;tk.preferAudio=aid2;return tk;});
+          document.getElementById('sp-ov').remove();
+          _origBatch.call(AndroidBridge,reqId,JSON.stringify(upd));
+        };
+      });
+    };
+  }
+})();
+</script>"""
+                        val modified = original.replace(
+                            "<script src=\"app.js",
+                            "$inject\n<script src=\"app.js"
+                        )
+                        val input = java.io.ByteArrayInputStream(modified.toByteArray(Charsets.UTF_8))
+                        return android.webkit.WebResourceResponse("text/html", "UTF-8", input)
+                    } catch (e: Exception) { }
+                }
+                return null
+            }
             override fun onPageFinished(view: android.webkit.WebView?, url: String?) {
                 super.onPageFinished(view, url)
             }
@@ -128,6 +289,8 @@ class MainActivity : AppCompatActivity() {
                     if (!handled) {
                         // 已在根页面：2秒内再按一次退出
                         if (System.currentTimeMillis() - backPressedTime < BACK_PRESS_INTERVAL) {
+                            // 退出前直接清理已完成任务，不依赖 onStop/isFinishing 生命周期标志
+                            doCleanupOnExit()
                             finish()
                         } else {
                             backPressedTime = System.currentTimeMillis()
@@ -246,23 +409,6 @@ class MainActivity : AppCompatActivity() {
         // 应用停止时再次保存，确保数据不丢失
         TaskManager.saveAll()
         
-        // 退出时清理已完成任务（如果用户开启了该选项）
-        // 注意：必须在 onStop() 执行，onDestroy() 在应用被系统杀死时不一定调用
-        try {
-            val prefs = getSharedPreferences("bbdown_settings", Context.MODE_PRIVATE)
-            if (prefs.getString("clearOnExit", "false") == "true") {
-                val before = TaskManager.all.size
-                TaskManager.clearFinished()
-                val after = TaskManager.all.size
-                if (before != after) {
-                    TaskStore.save()
-                    Logger.i("MainActivity", "退出清理: 移除 ${before - after} 个已完成任务")
-                }
-            }
-        } catch (e: Exception) {
-            Logger.e("MainActivity", "退出清理失败: ${e.message}")
-        }
-        
         // 如果有运行中的任务，确保前台服务已启动
         if (TaskManager.all.any { it.isRunning }) {
             try { DownloadService.start(this) } catch (_: Exception) {}
@@ -270,10 +416,30 @@ class MainActivity : AppCompatActivity() {
         Logger.i("MainActivity", "onStop: 任务已保存，前台服务已更新")
     }
 
+    /** 退出时清理已完成任务（直接调用，不依赖 isFinishing 等生命周期标志） */
+    private fun doCleanupOnExit() {
+        if (didCleanOnExit) return
+        didCleanOnExit = true
+        try {
+            val prefs = getSharedPreferences("bbdown_settings", Context.MODE_PRIVATE)
+            if (prefs.getString("clearOnExit", "false") == "true") {
+                val before = TaskManager.all.size
+                TaskManager.clearFinished()
+                val after = TaskManager.all.size
+                if (before != after) {
+                    Logger.i("MainActivity", "退出清理: 移除 ${before - after} 个已完成任务")
+                }
+            }
+        } catch (e: Exception) {
+            Logger.e("MainActivity", "退出清理失败: ${e.message}")
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
-        // 最终保存一次任务状态
+        // 最终保存一次任务状态，并兜底清理（覆盖从最近任务划掉退出的场景）
         TaskManager.saveAll()
+        doCleanupOnExit()
         Logger.i("MainActivity", "onDestroy: 任务已保存")
     }
 }

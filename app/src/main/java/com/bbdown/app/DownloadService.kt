@@ -47,10 +47,11 @@ class DownloadService : Service() {
             } catch (_: Exception) {}
         }
 
-        /** 根据是否有运行中任务，启动或停止服务 */
+        /** 根据是否有未完成任务，启动或停止服务 */
         fun update(context: Context) {
-            val running = TaskManager.all.any { it.isRunning }
-            if (running) start(context) else stop(context)
+            // 只要还有未完成任务(含排队中)就保持服务存活，
+            // 所有任务终结(完成/失败/取消)后才停止
+            if (TaskManager.hasActiveTasks()) start(context) else stop(context)
         }
     }
 
@@ -76,7 +77,7 @@ class DownloadService : Service() {
             Logger.w("DownloadService", "获取 WakeLock 失败: ${e.message}")
         }
 
-        // 后台监测线程：每 2 秒刷新通知内容；无运行任务时自动退出
+        // 后台监测线程：每 2 秒刷新通知内容；所有任务终结后自动退出
         checkThread = Thread {
             var idleCount = 0
             while (running) {
@@ -85,9 +86,11 @@ class DownloadService : Service() {
                 } catch (_: InterruptedException) {
                     break
                 }
-                val runningTask = TaskManager.all.firstOrNull { it.isRunning }
-                if (runningTask != null) {
+                if (TaskManager.hasActiveTasks()) {
                     idleCount = 0
+                    // 显示第一个运行中任务；无运行中任务(全部排队)时显示等待中
+                    val displayTask = TaskManager.all.firstOrNull { it.isRunning }
+                        ?: TaskManager.all.firstOrNull()
                     // 如果 WakeLock 超时被释放，重新获取
                     try {
                         if (wakeLock?.isHeld == false) {
@@ -96,13 +99,13 @@ class DownloadService : Service() {
                     } catch (_: Exception) {}
                     try {
                         val mgr = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-                        mgr.notify(NOTIF_ID, buildNotification(runningTask))
+                        mgr.notify(NOTIF_ID, buildNotification(displayTask))
                     } catch (_: Exception) {}
                 } else {
                     idleCount++
-                    // 连续 2 次（4秒）无运行任务，自动停止服务
+                    // 连续 2 次（4秒）无未完成任务，停止前台服务
                     if (idleCount >= 2) {
-                        Logger.i("DownloadService", "无运行中任务，停止前台服务")
+                        Logger.i("DownloadService", "所有任务已终结，停止前台服务")
                         stopForeground(STOP_FOREGROUND_REMOVE)
                         stopSelf()
                         break
@@ -117,10 +120,10 @@ class DownloadService : Service() {
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        // 应用从最近任务列表移除时，如果有运行中的任务，重启服务
+        // 应用从最近任务列表移除时，如果有未完成任务，重启服务
         // 注意：Android 12+（API 31+）在后台启动前台服务会抛出
         // ForegroundServiceStartNotAllowedException，需 try/catch 兜底，避免崩溃
-        if (TaskManager.all.any { it.isRunning }) {
+        if (TaskManager.hasActiveTasks()) {
             Logger.i("DownloadService", "应用被移除但有运行中任务，重启服务")
             val restartIntent = Intent(applicationContext, DownloadService::class.java)
             try {

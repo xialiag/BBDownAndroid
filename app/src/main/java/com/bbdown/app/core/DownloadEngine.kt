@@ -125,7 +125,6 @@ object DownloadEngine {
                         if (play.audios.isEmpty())
                             throw IllegalStateException("无可用音频流（可能需要登录 Cookie 或大会员）")
 
-                        val pageLabel = if (totalPages > 1) ".P${page.index}" else ""
                         // 先选轨，再构建文件名（文件名变量需要轨道信息）
                         val selectedVideo = if (task.downloadMode != "audio_only") {
                             selectVideo(play, task.videoId, task.preferCodec, task.videoAscending)
@@ -135,9 +134,9 @@ object DownloadEngine {
                         val selectedAudio = selectAudio(play, task.preferAudio, task.audioAscending)
                         val baseName = buildFileName(task, page, totalPages > 1, selectedVideo, selectedAudio)
 
-                        // 累计本页实际下载字节数
-                        var pageDownloaded = 0L
-                        var pageTotal = 0L
+                        // 累计本页实际下载字节数（AtomicLong：被 8 个分片线程并发写入，避免数据竞争）
+                        val pageDownloaded = java.util.concurrent.atomic.AtomicLong(0)
+                        val pageTotal = java.util.concurrent.atomic.AtomicLong(0)
 
                         // 下载视频
                         var vFile: File? = null
@@ -147,22 +146,22 @@ object DownloadEngine {
                                 task.status = DownloadTask.STATUS_DOWNLOADING
                                 // 混流模式用临时名（混流后删除）；skipMux 模式用最终名
                                 val vExt = if (task.skipMux) ".mp4" else ".vpart"
-                                vFile = File(workDir, "${baseName}${pageLabel}${vExt}")
-                                if (video.size > 0) pageTotal += video.size.toLong()
+                                vFile = File(workDir, "${baseName}${vExt}")
+                                if (video.size > 0) pageTotal.set(video.size.toLong())
                                 val vUrl = if (task.forceHttp && effectivePage.epid.isEmpty()) BilibiliApi.forceHttp(video.baseUrl) else video.baseUrl
                                 val vDownloader = MultiThreadDownloader(threads, task.cookie) { d, t, s ->
-                                    pageDownloaded = (baseProgress * 1_000_000).toLong() + d
-                                    if (t > 0) pageTotal = pageTotal.coerceAtLeast(t)
-                                    task.downloadedBytes = pageDownloaded
-                                    task.totalBytes = (baseProgress * 1_000_000).toLong() + pageTotal
+                                    pageDownloaded.set((baseProgress * 1_000_000).toLong() + d)
+                                    if (t > 0) pageTotal.accumulateAndGet(t) { a, b -> maxOf(a, b) }
+                                    task.downloadedBytes = pageDownloaded.get()
+                                    task.totalBytes = (baseProgress * 1_000_000).toLong() + pageTotal.get()
                                     task.speed = s
                                     if (t > 0) task.progress = baseProgress + (d.toFloat() / t) * pageWeight * 0.9f
                                 }
                                 com.bbdown.app.TaskManager.registerDownloader(task.taskId, vDownloader)
                                 vDownloader.download(vUrl, vFile)
                                 // 下载完成后用实际文件大小更新
-                                pageDownloaded = (baseProgress * 1_000_000).toLong() + vFile.length()
-                                task.downloadedBytes = pageDownloaded
+                                pageDownloaded.set((baseProgress * 1_000_000).toLong() + vFile.length())
+                                task.downloadedBytes = pageDownloaded.get()
                                 if (task.status == DownloadTask.STATUS_CANCELED) { vFile.delete(); return }
                                 if (task.status == DownloadTask.STATUS_PAUSED) return
                                 outputs.add(vFile.absolutePath)
@@ -178,21 +177,21 @@ object DownloadEngine {
                             val audioExt = if (audio.codecs == "FLAC") "flac" else "m4a"
                             // audio_only 模式下用干净文件名作为最终输出；混流模式用临时名（混流后删除）
                             val aSuffix = if (task.downloadMode == "audio_only") ".$audioExt" else if (task.skipMux) ".$audioExt" else ".apart"
-                            val aTarget = File(workDir, "${baseName}${pageLabel}${aSuffix}")
+                            val aTarget = File(workDir, "${baseName}${aSuffix}")
                             aFile = aTarget
                             val aUrl = if (task.forceHttp && effectivePage.epid.isEmpty()) BilibiliApi.forceHttp(audio.baseUrl) else audio.baseUrl
-                            val aPageBase = pageDownloaded
+                            val aPageBase = pageDownloaded.get()
                             val aDownloader = MultiThreadDownloader(threads, task.cookie) { d, t, s ->
-                                if (t > 0) pageTotal = pageTotal.coerceAtLeast(t)
+                                if (t > 0) pageTotal.accumulateAndGet(t) { a, b -> maxOf(a, b) }
                                 task.downloadedBytes = aPageBase + d
-                                task.totalBytes = (baseProgress * 1_000_000).toLong() + pageTotal
+                                task.totalBytes = (baseProgress * 1_000_000).toLong() + pageTotal.get()
                                 task.speed = s
                                 if (t > 0) task.progress = baseProgress + pageWeight * 0.9f + (d.toFloat() / t) * pageWeight * 0.05f
                             }
                             com.bbdown.app.TaskManager.registerDownloader(task.taskId, aDownloader)
                             aDownloader.download(aUrl, aTarget)
-                            pageDownloaded = aPageBase + aTarget.length()
-                            task.downloadedBytes = pageDownloaded
+                            pageDownloaded.set(aPageBase + aTarget.length())
+                            task.downloadedBytes = pageDownloaded.get()
                             if (task.status == DownloadTask.STATUS_CANCELED) { vFile?.delete(); aTarget.delete(); return }
                             if (task.status == DownloadTask.STATUS_PAUSED) return
                             outputs.add(aTarget.absolutePath)
@@ -207,10 +206,16 @@ object DownloadEngine {
                             task.status = DownloadTask.STATUS_MUXING
                             task.progress = baseProgress + pageWeight * 0.95f
                             // 混流输出文件名：有 filePattern 时用自定义名称，否则用默认格式
+                            // 默认格式：合集/{序号}. {标题}，合集多P/{序号}. {主标题} P{内部分P号}，多P/{标题} P{分P号}
                             val outName = if (task.filePattern.isNotEmpty()) {
                                 buildFileName(task, page, totalPages > 1, selectedVideo, selectedAudio)
                             } else {
-                                sanitize(if (totalPages > 1) "${page.index}. ${page.title}" else task.title)
+                                sanitize(when {
+                                    task.collectionTitle.isNotEmpty() && totalPages > 1 -> "${task.collectionIndex}. ${task.title} P${page.index}"
+                                    task.collectionTitle.isNotEmpty() -> "${task.collectionIndex}. ${page.title}"
+                                    totalPages > 1 -> "${page.title} P${page.index}"
+                                    else -> task.title
+                                })
                             }
                             val outFile = File(workDir, "$outName.mp4")
                             // 先下载封面（如需嵌入元数据）— 使用原始URL，保留原始格式（与 DotNet 版一致）
@@ -536,7 +541,7 @@ object DownloadEngine {
     /**
      * 构建文件名，支持 DotNet BBDown 的全部文件名变量。
      * 变量列表（与 DotNet BBDown 一致）：
-     *   <videoTitle> <pageNumber> <pageNumberWithZero> <pageTitle>
+     *   <videoTitle> <pageNumber> <pageNumberWithZero> <pageTitle> <collectionIndex>
      *   <bvid> <aid> <cid> <dfn> <res> <fps> <videoCodecs> <videoBandwidth>
      *   <audioCodecs> <audioBandwidth> <ownerName> <ownerMid> <publishDate>
      */
@@ -551,25 +556,38 @@ object DownloadEngine {
                 sdf.format(java.util.Date(task.pubTime * 1000))
             } else ""
             return task.filePattern
-                .replace("<videoTitle>", sanitize(task.title))
-                .replace("<pageNumber>", page.index.toString())
-                .replace("<pageNumberWithZero>", String.format("%02d", page.index))
-                .replace("<pageTitle>", sanitize(page.title))
-                .replace("<bvid>", sanitize(task.bvid))
-                .replace("<aid>", page.aid)
-                .replace("<cid>", page.cid)
-                .replace("<dfn>", video?.dfn ?: "")
-                .replace("<res>", video?.res ?: "")
-                .replace("<fps>", video?.fps ?: "")
-                .replace("<videoCodecs>", video?.codecs ?: "")
-                .replace("<videoBandwidth>", video?.bandwidth?.toString() ?: "")
-                .replace("<audioCodecs>", audio?.codecs ?: "")
-                .replace("<audioBandwidth>", audio?.bandwidth?.toString() ?: "")
-                .replace("<ownerName>", sanitize(task.upperName))
-                .replace("<ownerMid>", task.ownerMid)
-                .replace("<publishDate>", pubDateStr)
+                .replace("{videoTitle}", sanitize(task.title))
+                .replace("{pageNumber}", page.index.toString())
+                .replace("{pageNumberWithZero}", String.format("%02d", page.index))
+                .replace("{pageTitle}", sanitize(page.title))
+                .replace("{collectionIndex}", if (task.collectionIndex > 0) task.collectionIndex.toString() else "")
+                .replace("{bvid}", sanitize(task.bvid))
+                .replace("{aid}", page.aid)
+                .replace("{cid}", page.cid)
+                .replace("{dfn}", video?.dfn ?: "")
+                .replace("{res}", video?.res ?: "")
+                .replace("{fps}", video?.fps ?: "")
+                .replace("{videoCodecs}", video?.codecs ?: "")
+                .replace("{videoBandwidth}", video?.bandwidth?.toString() ?: "")
+                .replace("{audioCodecs}", audio?.codecs ?: "")
+                .replace("{audioBandwidth}", audio?.bandwidth?.toString() ?: "")
+                .replace("{ownerName}", sanitize(task.upperName))
+                .replace("{ownerMid}", task.ownerMid)
+                .replace("{publishDate}", pubDateStr)
         }
-        return sanitize(if (multiPage) "P${page.index}.${page.title}" else task.title)
+        // 默认命名规则：
+        // - 合集单P: {合集序号}. {分P标题}
+        // - 合集多P: {合集序号}. {主标题} P{内部分P号}
+        // - 普通多P: {分P标题} P{分P序号}
+        // - 普通单P: {视频标题}
+        val hasCollection = task.collectionTitle.isNotEmpty()
+        val pIdx = if (task.collectionIndex > 0) task.collectionIndex else page.index
+        return sanitize(when {
+            hasCollection && multiPage -> "${pIdx}. ${task.title} P${page.index}"
+            hasCollection -> "${pIdx}. ${page.title}"
+            multiPage -> "${page.title} P${page.index}"
+            else -> task.title
+        })
     }
 
     fun sanitize(name: String): String {

@@ -31,11 +31,24 @@ object TaskStore {
     fun save() {
         val file = storeFile ?: return
         synchronized(saveLock) {
-            try {
-                val arr = JSONArray()
-                for (t in TaskManager.all) {
-                    arr.put(taskToJson(t))
-                }
+            saveTasks(TaskManager.all, file)
+        }
+    }
+
+    /** 直接保存指定任务列表到磁盘（线程安全，用于启动时清理等场景） */
+    fun saveDirect(tasks: List<DownloadTask>) {
+        val file = storeFile ?: return
+        synchronized(saveLock) {
+            saveTasks(tasks, file)
+        }
+    }
+
+    private fun saveTasks(tasks: List<DownloadTask>, file: File) {
+        try {
+            val arr = JSONArray()
+            for (t in tasks) {
+                arr.put(taskToJson(t))
+            }
                 // 原子写入：先写临时文件，再原子地替换原文件，
                 // 避免进程在写入过程中被杀死导致 tasks.json 损坏。
                 // 使用唯一临时文件名，防止并发写入时 tmp 文件被覆盖
@@ -79,7 +92,6 @@ object TaskStore {
             } catch (e: Exception) {
                 Logger.e("TaskStore", "保存任务失败", e)
             }
-        }
     }
 
     /** 从磁盘加载已保存的任务列表 */
