@@ -307,7 +307,14 @@ object BilibiliApi {
     fun getSubtitles(aid: String, cid: String): List<SubtitleInfo> {
         val result = ArrayList<SubtitleInfo>()
         try {
-            val resp = Http.get("https://api.bilibili.com/x/player/v2?aid=$aid&cid=$cid")
+            // x/player/v2 的字幕字段需要 wbi 签名(+cookie) 才会返回, 不带签名永远为空
+            ensureWbi()
+            val ts = (System.currentTimeMillis() / 1000).toString()
+            val params = LinkedHashMap<String, String>()
+            params["aid"] = aid
+            params["cid"] = cid
+            params["wts"] = ts
+            val resp = Http.get("https://api.bilibili.com/x/player/v2?${wbiSign(params)}")
             val json = JSONObject(resp)
             val data = json.optJSONObject("data") ?: return result
             val subObj = data.optJSONObject("subtitle") ?: return result
@@ -332,12 +339,23 @@ object BilibiliApi {
      *  - 缺少 content 字段时该行内容留空
      *  - 时间格式: hh:mm:ss,fff（SRT 标准，逗号分隔毫秒）
      */
-    fun downloadSubtitleAsSrt(subtitleUrl: String): String {
+    fun downloadSubtitleAsSrt(subtitleUrl: String, duration: Int = 0): String {
         var url = subtitleUrl
         if (url.startsWith("//")) url = "https:$url"
         val resp = Http.get(url)
         val json = JSONObject(resp)
         val body = json.optJSONArray("body") ?: return ""
+        // 校验字幕时间范围: 明显超出视频时长(+10s容差)说明该字幕不是这个视频的
+        // (B站AI字幕槽位有概率串台, 会返回其他视频的ASR内容), 跳过不保存
+        var maxTo = 0.0
+        for (i in 0 until body.length()) {
+            val to = body.getJSONObject(i).optDouble("to", 0.0)
+            if (to > maxTo) maxTo = to
+        }
+        if (duration > 0 && maxTo > duration + 10) {
+            Logger.w("Subtitle", "字幕时间范围(${String.format("%.1f", maxTo)}s)超出视频时长(${duration}s), 疑似与视频无关的字幕, 已跳过")
+            return ""
+        }
         val sb = StringBuilder()
         for (i in 0 until body.length()) {
             val item = body.getJSONObject(i)

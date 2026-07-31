@@ -426,7 +426,7 @@ object DownloadEngine {
             for (sub in subs) {
                 if (skipAi && sub.ai) continue
                 if (sub.subtitleUrl.isEmpty()) continue
-                val srtContent = BilibiliApi.downloadSubtitleAsSrt(sub.subtitleUrl)
+                val srtContent = BilibiliApi.downloadSubtitleAsSrt(sub.subtitleUrl, page.duration)
                 if (srtContent.isNotEmpty()) {
                     val lang = if (sub.lanDoc.isNotEmpty()) sub.lanDoc else sub.lan
                     val subFile = File(workDir, "$baseName.${lang}.srt")
