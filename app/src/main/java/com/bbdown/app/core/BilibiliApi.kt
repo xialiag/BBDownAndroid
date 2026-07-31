@@ -1833,7 +1833,7 @@ object BilibiliApi {
     /** 获取当前登录用户关注列表（分页）
      *  API: /x/relation/followings?vmid={mid}&pn={page}&ps={pageSize}
      *  orderType: "attention"=最常访问(最近比较在意)，""=按关注时间(最近关注)
-     *  tagId: 0=全部，>0=指定分组(分类)
+     *  tagId: 0=全部，非0=指定分组；特别关注分组 tagid 为 -10（按 list[].tag 数组匹配）
      *  需要登录Cookie
      */
     fun getFollowings(mid: String, page: Int = 1, pageSize: Int = 50, orderType: String = "attention", tagId: Int = 0): Pair<List<UpperInfo>, Int> {
@@ -1842,7 +1842,7 @@ object BilibiliApi {
         val origin = "https://space.bilibili.com"
         val referer = "https://space.bilibili.com/$mid/fans/follow"
         try {
-            if (tagId > 0) {
+            if (tagId != 0) {
                 // ===== 分组过滤模式 =====
                 // 使用全量缓存：首次请求时获取所有关注页并按tag过滤，后续翻页直接从缓存读取
                 val cache = filteredCache

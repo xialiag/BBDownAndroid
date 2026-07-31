@@ -2774,7 +2774,7 @@ function renderFollowings(container){
     </div>`;
 
   // 选中分组但无结果时提示
-  const emptyTagHint = (currentTagId > 0 && list.length === 0)
+  const emptyTagHint = (currentTagId !== 0 && list.length === 0)
     ? `<div style="color:var(--fg-dim);font-size:12px;padding:10px 0">该分组暂无UP主或加载受限<br><span class="follow-retry-link" onclick="switchFollowTag(0)">查看全部关注</span></div>`
     : '';
 

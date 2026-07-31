@@ -1940,7 +1940,7 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
 
     /** 获取当前登录用户关注列表 → {items, total, page}
      *  orderType: "attention"=最常访问(最近比较在意)，""=按关注时间
-     *  tagId: 0=全部，>0=指定分组(分类)
+     *  tagId: 0=全部，非0=指定分组；特别关注分组 tagid 为 -10
      */
     @JavascriptInterface
     fun getFollowings(reqId: Int, mid: String, page: Int, orderType: String, tagId: Int) {
