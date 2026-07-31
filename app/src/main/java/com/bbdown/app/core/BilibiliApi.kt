@@ -339,23 +339,42 @@ object BilibiliApi {
      *  - 缺少 content 字段时该行内容留空
      *  - 时间格式: hh:mm:ss,fff（SRT 标准，逗号分隔毫秒）
      */
+    /** 从字幕JSON文本提取最大结束时间(纯正则, 不依赖org.json, 可在JVM单测验证)
+     *  B站字幕JSON中 "to" 只出现在 body 数组项里 */
+    fun extractSubtitleMaxTo(jsonText: String): Double {
+        var maxTo = 0.0
+        val re = Regex("\"to\"\\s*:\\s*([0-9]+(?:\\.[0-9]+)?)")
+        for (m in re.findAll(jsonText)) {
+            val v = m.groupValues[1].toDoubleOrNull() ?: continue
+            if (v > maxTo) maxTo = v
+        }
+        return maxTo
+    }
+
+    /** 字幕是否超出视频时长(超出+10s容差判定为无关字幕) */
+    fun subtitleExceedsDuration(maxTo: Double, duration: Int): Boolean =
+        duration > 0 && maxTo > duration + 10
+
+    /**
+     * 下载字幕并转换为 SRT 格式（参考 DotNet BBDown 的 ConvertSubFromJson）
+     *  B站字幕 JSON 结构: { "body": [ { "from": 12.34, "to": 15.67, "content": "..." } ] }
+     *  - 缺少 from 字段时起始时间用 0.0
+     *  - 缺少 content 字段时该行内容留空
+     *  - 时间格式: hh:mm:ss,fff（SRT 标准，逗号分隔毫秒）
+     */
     fun downloadSubtitleAsSrt(subtitleUrl: String, duration: Int = 0): String {
         var url = subtitleUrl
         if (url.startsWith("//")) url = "https:$url"
         val resp = Http.get(url)
-        val json = JSONObject(resp)
-        val body = json.optJSONArray("body") ?: return ""
         // 校验字幕时间范围: 明显超出视频时长(+10s容差)说明该字幕不是这个视频的
         // (B站AI字幕槽位有概率串台, 会返回其他视频的ASR内容), 跳过不保存
-        var maxTo = 0.0
-        for (i in 0 until body.length()) {
-            val to = body.getJSONObject(i).optDouble("to", 0.0)
-            if (to > maxTo) maxTo = to
-        }
-        if (duration > 0 && maxTo > duration + 10) {
+        val maxTo = extractSubtitleMaxTo(resp)
+        if (subtitleExceedsDuration(maxTo, duration)) {
             Logger.w("Subtitle", "字幕时间范围(${String.format("%.1f", maxTo)}s)超出视频时长(${duration}s), 疑似与视频无关的字幕, 已跳过")
             return ""
         }
+        val json = JSONObject(resp)
+        val body = json.optJSONArray("body") ?: return ""
         val sb = StringBuilder()
         for (i in 0 until body.length()) {
             val item = body.getJSONObject(i)
