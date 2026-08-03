@@ -3398,15 +3398,15 @@ function renderSettings(eb){
     </div>
     <div id="cache-size-line" style="font-size:11px;color:var(--fg-dim);margin-top:6px">加载中…</div>
     <h2>调试</h2>
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px">
-      <div>
-        <div style="font-size:12px;font-weight:600">调试服务器</div>
-        <div style="font-size:10.5px;color:var(--fg-dim);margin-top:3px;line-height:1.5">端口 19865，同一 WiFi 浏览器访问 http://手机IP:19865/<br>可实时查看调试日志与崩溃日志（默认关闭）</div>
+    <div class="switch-row">
+      <div class="sw-text">
+        <div class="sw-label">调试服务器</div>
+        <div class="sw-desc">端口 19865，同一 WiFi 浏览器访问 http://手机IP:19865/ 实时查看调试日志与崩溃日志（默认关闭）</div>
       </div>
-      <div class="theme-switch" style="flex:0 0 auto">
-        <button class="${(s.debug_server==='true')?'active':''}" onclick="setDebugServer(true)">开启</button>
-        <button class="${(s.debug_server!=='true')?'active':''}" onclick="setDebugServer(false)">关闭</button>
-      </div>
+      <label class="switch">
+        <input type="checkbox" ${(s.debug_server||'false')==='true'?'checked':''} onchange="saveSetting('debug_server',this.checked?'true':'false')">
+        <span class="slider"></span>
+      </label>
     </div>
     <div class="btn-row">
       <button class="btn btn-sec" onclick="showDebugLogs()">查看调试日志</button>
@@ -3421,12 +3421,15 @@ function renderSettings(eb){
     <div class="btn-row">
       <button class="btn btn-sec" onclick="checkUpdateNow(false)">检查更新</button>
     </div>
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px">
-      <div>
-        <div style="font-size:12px;font-weight:600">启动时检查更新</div>
-        <div style="font-size:10.5px;color:var(--fg-dim);margin-top:2px">启动后静默检查 GitHub 新版本，有新版本才提示（仓库: xialiag/BBDownAndroid）</div>
+    <div class="switch-row" style="margin-top:8px">
+      <div class="sw-text">
+        <div class="sw-label">启动时检查更新</div>
+        <div class="sw-desc">启动后静默检查 GitHub 新版本，有新版本才提示（仓库: xialiag/BBDownAndroid）</div>
       </div>
-      <button class="btn ${s.check_update==='true'?'btn-primary':'btn-sec'}" style="flex:0 0 auto" onclick="saveSetting('check_update', (state.settings.check_update==='true')?'false':'true')">${s.check_update==='true'?'开':'关'}</button>
+      <label class="switch">
+        <input type="checkbox" ${(s.check_update||'true')==='true'?'checked':''} onchange="saveSetting('check_update',this.checked?'true':'false')">
+        <span class="slider"></span>
+      </label>
     </div>
   </div>`;
   // 进入设置页后主动检查权限状态，避免一直停留在"检查中…"
@@ -3818,11 +3821,7 @@ async function saveSetting(key, value){
   }catch(e){ toast('保存失败：'+e,'err'); }
 }
 
-/** 调试服务器开关（桥侧 setSetting 特判 key 启停 19865 端口服务） */
-async function setDebugServer(on){
-  await saveSetting('debug_server', on?'true':'false');
-  toast(on?'调试服务器已开启（19865）':'调试服务器已关闭', on?'ok':'');
-}
+/** 调试服务器开关由设置页 switch 滑块直接 saveSetting('debug_server')，桥侧特判启停 */
 
 async function saveOutputDir(){
   const v = el('set_output_dir').value.trim();
