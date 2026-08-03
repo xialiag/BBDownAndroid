@@ -68,7 +68,7 @@ object DebugServer {
 
             when {
                 route == "/json" -> respond(sock, statusJson(), "application/json")
-                route == "/logs" -> respond(sock, logsJson(query), "application/json")
+                route == "/logs" -> respond(sock, logsJson(query), if (query.contains("view=")) "text/plain" else "application/json")
                 route == "/crash" -> respond(sock, crashRoute(query), if (query.contains("view=")) "text/plain" else "application/json")
                 else -> respond(sock, statusHtml(), "text/html")
             }
@@ -129,11 +129,49 @@ object DebugServer {
         return arr.toString()
     }
 
+    private fun historyFiles(): List<File> {
+        val dir = crashDir() ?: return emptyList()
+        if (!dir.exists()) return emptyList()
+        return dir.listFiles { f -> f.name.startsWith("debug_") && f.name.endsWith(".log") }
+            ?.sortedByDescending { it.lastModified() } ?: emptyList()
+    }
+
+    /** 历史日志文件名白名单（防路径穿越） */
+    private fun isHistoryName(name: String): Boolean = name.matches(Regex("debug_[0-9-]+\\.log"))
+
     private fun logsJson(query: String): String {
         if (query.contains("clear=1")) {
             Logger.clear()
             Logger.i("Debug", "调试面板清空了内存日志")
             return """{"ok":true}"""
+        }
+        val view = Regex("view=([^&]+)").find(query)?.groupValues?.get(1)?.take(200)
+        if (view != null) {
+            if (!isHistoryName(view)) return "非法文件名"
+            val dir = crashDir() ?: return "日志目录不存在"
+            val f = java.io.File(dir, view)
+            if (!f.exists()) return "历史日志不存在: $view"
+            return try {
+                // 超过 2MB 只读末尾 2MB，避免一次性读爆内存
+                if (f.length() > 2L * 1024 * 1024) {
+                    f.inputStream().use { ins ->
+                        ins.skip(f.length() - 2L * 1024 * 1024)
+                        ins.readBytes().toString(Charsets.UTF_8)
+                    }
+                } else f.readText(Charsets.UTF_8)
+            } catch (e: Exception) { "读取失败: ${e.message}" }
+        }
+        val del = Regex("delete=([^&]+)").find(query)?.groupValues?.get(1)?.take(200)
+        if (del != null) {
+            if (!isHistoryName(del)) return """{"ok":false,"msg":"非法文件名"}"""
+            val dir = crashDir() ?: return """{"ok":false,"msg":"日志目录不存在"}"""
+            val f = java.io.File(dir, del)
+            if (f.exists()) {
+                f.delete()
+                Logger.i("Debug", "已删除历史日志: $del")
+                return """{"ok":true,"deleted":"$del"}"""
+            }
+            return """{"ok":false,"msg":"文件不存在"}"""
         }
         val after = Regex("after=(\\d+)").find(query)?.groupValues?.get(1)?.toLongOrNull()
         if (after != null) {
@@ -164,6 +202,14 @@ object DebugServer {
                 put("mtime", f.lastModified())
             })
         }
+        val hist = JSONArray()
+        historyFiles().forEach { f ->
+            hist.put(JSONObject().apply {
+                put("name", f.name)
+                put("size", f.length())
+                put("mtime", f.lastModified())
+            })
+        }
         return JSONObject().apply {
             put("ts", System.currentTimeMillis())
             put("version", com.bbdown.app.BuildConfig.VERSION_NAME)
@@ -171,6 +217,7 @@ object DebugServer {
             put("logSeq", Logger.maxSeq())
             put("debugServer", running)
             put("crash", arr)
+            put("history", hist)
         }.toString()
     }
 
@@ -203,6 +250,8 @@ a{color:#FB7299}
 <div class="card" id="stateCard">加载中…</div>
 <h2>崩溃日志</h2>
 <div id="crashList">加载中…</div>
+<h2>历史日志</h2>
+<div id="histList">加载中…</div>
 <h2>实时日志 <span id="logState" class="off">连接中</span></h2>
 <div class="log" id="logBox"></div>
 <div style="margin-top:8px"><button class="btn" onclick="clearLogs()">清空日志</button></div>
@@ -210,7 +259,7 @@ a{color:#FB7299}
 let logSeq = 0;
 function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 function fmtSize(b){if(!b)return'0 B';const u=['B','KB','MB','GB'];let i=0;while(b>=1024&&i<3){b/=1024;i++;}return b.toFixed(i?1:0)+' '+u[i];}
-function fmtTime(t){const d=new Date(t);return ('0'+d.getMonth()+1).slice(-2)+'-'+('0'+d.getDate()).slice(-2)+' '+('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);}
+function fmtTime(t){const d=new Date(t);return ('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2)+' '+('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);}
 async function pollState(){
   try{
     const s=await (await fetch('/json')).json();
@@ -224,6 +273,11 @@ async function pollState(){
           '<span style="color:#969696">'+fmtSize(c.size)+' · '+fmtTime(c.mtime)+'</span>'+
           '<button class="btn del" onclick="delCrash(\''+esc(c.name)+'\')">删除</button></div>').join('')
       : '<div class="card" style="color:#969696">暂无崩溃日志</div>';
+    document.getElementById('histList').innerHTML = (s.history||[]).length
+      ? s.history.map(h=>'<div class="crash-item"><a href="/logs?view='+esc(h.name)+'" target="_blank">'+esc(h.name)+'</a>'+
+          '<span style="color:#969696">'+fmtSize(h.size)+' · '+fmtTime(h.mtime)+'</span>'+
+          '<button class="btn del" onclick="delHist(\''+esc(h.name)+'\')">删除</button></div>').join('')
+      : '<div class="card" style="color:#969696">暂无历史日志</div>';
   }catch(e){}
 }
 async function pollLogs(){
@@ -246,6 +300,11 @@ async function clearLogs(){
 async function delCrash(name){
   if(!confirm('删除崩溃日志 '+name+' ?')) return;
   await fetch('/crash?delete='+encodeURIComponent(name));
+  pollState();
+}
+async function delHist(name){
+  if(!confirm('删除历史日志 '+name+' ?')) return;
+  await fetch('/logs?delete='+encodeURIComponent(name));
   pollState();
 }
 setInterval(pollState, 2000); setInterval(pollLogs, 2000);

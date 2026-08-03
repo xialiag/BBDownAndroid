@@ -23,6 +23,7 @@ data class LogLine(
  * - 支持日志级别：D(调试) / I(信息) / W(警告) / E(错误)
  * - 内存环形缓冲区，自动裁剪旧日志
  * - 同时输出到 logcat 便于 adb 调试
+ * - 自动落盘到 logs/debug_yyyy-MM-dd.log(按天轮转，保留 7 天，供调试服务器读历史日志)
  * - 支持导出到文件（带时间戳和分隔符）
  */
 object Logger {
@@ -32,8 +33,46 @@ object Logger {
     private val dateFormat = object : ThreadLocal<SimpleDateFormat>() {
         override fun initialValue() = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault())
     }
-    private val fileDateFormat = object : ThreadLocal<SimpleDateFormat>() {
+    private val fileTimeFormat = object : ThreadLocal<SimpleDateFormat>() {
         override fun initialValue() = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.getDefault())
+    }
+    private val dayFormat = object : ThreadLocal<SimpleDateFormat>() {
+        override fun initialValue() = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+    }
+
+    // ===== 落盘（历史日志）=====
+    @Volatile private var logDir: File? = null
+    private val fileLock = Any()
+    @Volatile private var currentDay = ""
+    private var currentFile: File? = null
+
+    /** 初始化日志目录（应用启动时调用；同时清理 7 天前的历史日志文件） */
+    fun init(dir: File) {
+        try {
+            dir.mkdirs()
+            synchronized(fileLock) { logDir = dir }
+            try {
+                val cutoff = System.currentTimeMillis() - 7L * 24 * 3600 * 1000
+                dir.listFiles { f -> f.name.startsWith("debug_") && f.name.endsWith(".log") && f.lastModified() < cutoff }
+                    ?.forEach { runCatching { it.delete() } }
+            } catch (_: Exception) {}
+        } catch (_: Exception) {}
+    }
+
+    /** 写一行到当天的历史日志文件（失败不影响主流程） */
+    private fun writeFile(level: String, tag: String, msg: String) {
+        val dir = logDir ?: return
+        try {
+            synchronized(fileLock) {
+                val day = dayFormat.get()!!.format(Date())
+                if (currentDay != day) {
+                    currentDay = day
+                    currentFile = File(dir, "debug_$day.log")
+                }
+                val f = currentFile ?: return
+                f.appendText("[" + fileTimeFormat.get()!!.format(Date()) + "][$level][$tag] $msg\n", Charsets.UTF_8)
+            }
+        } catch (_: Exception) {}
     }
 
     fun d(tag: String, msg: String) {
@@ -75,6 +114,7 @@ object Logger {
     private fun add(level: String, tag: String, msg: String) {
         val time = dateFormat.get()!!.format(Date())
         logs.addLast(LogLine(seqGen.getAndIncrement(), time, level, tag, msg))
+        writeFile(level, tag, msg)
         // 也输出到 logcat
         android.util.Log.println(when(level){
             "E" -> android.util.Log.ERROR

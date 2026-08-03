@@ -87,6 +87,9 @@ class MainActivity : AppCompatActivity() {
         // 安装全局崩溃捕获器（第一时间安装，确保后续异常都能被记录）
         CrashHandler.install(this)
 
+        // 初始化调试日志落盘（logs/debug_yyyy-MM-dd.log，保留 7 天，调试服务器可读历史日志）
+        com.bbdown.app.core.Logger.init(java.io.File(getExternalFilesDir(null), "logs"))
+
         // 初始化 Native 崩溃检测器：捕获 Java 无法捕获的 native 信号崩溃（如 FFmpegKit SIGSEGV），
         // 通过崩溃标记文件 + FFmpegKit 日志回调 + Signal 处理器三层机制记录崩溃上下文。
         NativeCrashDetector.init(this)
