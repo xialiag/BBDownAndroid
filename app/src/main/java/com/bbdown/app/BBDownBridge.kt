@@ -138,6 +138,8 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
             "videoAscending" to "false",
             "audioAscending" to "false",
             "forceHttp" to "false",
+            "debug_server" to "false",
+            "check_update" to "true",
             "api_type" to "web",
             "batchQn" to "auto",
             "delayPerPage" to "0",
@@ -220,22 +222,87 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
     fun getAppVersion(reqId: Int) {
         executor.execute {
             try {
-                @Suppress("DEPRECATION")
-                val pkgInfo = context.packageManager.getPackageInfo(context.packageName, 0)
-                val versionName = pkgInfo.versionName ?: "unknown"
-                val versionCode = if (android.os.Build.VERSION.SDK_INT >= 28) {
-                    pkgInfo.longVersionCode.toInt()
-                } else {
-                    @Suppress("DEPRECATION")
-                    pkgInfo.versionCode
-                }
                 val j = JSONObject()
-                j.put("versionName", versionName)
-                j.put("versionCode", versionCode)
+                j.put("versionName", appVersionName())
+                j.put("versionCode", appVersionCode())
                 ok(reqId, j)
             } catch (e: Exception) {
                 err(reqId, "获取版本信息失败: ${e.message}")
             }
+        }
+    }
+
+    private fun appVersionName(): String {
+        return try {
+            @Suppress("DEPRECATION")
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "unknown"
+        } catch (_: Exception) { "unknown" }
+    }
+
+    private fun appVersionCode(): Int {
+        return try {
+            @Suppress("DEPRECATION")
+            val pkgInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+            if (android.os.Build.VERSION.SDK_INT >= 28) pkgInfo.longVersionCode.toInt()
+            else pkgInfo.versionCode
+        } catch (_: Exception) { 0 }
+    }
+
+    // ============ 检查 GitHub 更新（固定仓库 xialiag/BBDownAndroid，无需设置） ============
+
+    private val updateRepo = "xialiag/BBDownAndroid"
+
+    /** 解析 "v2.0.0" / "2.0.0-beta1" 为可比较数字段列表 */
+    private fun versionParts(v: String): List<Long> {
+        return Regex("\\d+").findAll(v).map { it.value.toLong() }.toList()
+    }
+
+    private fun versionCompare(a: String, b: String): Int {
+        val pa = versionParts(a); val pb = versionParts(b)
+        for (i in 0 until maxOf(pa.size, pb.size)) {
+            val x = pa.getOrElse(i) { 0L }; val y = pb.getOrElse(i) { 0L }
+            if (x != y) return if (x > y) 1 else -1
+        }
+        return 0
+    }
+
+    /** 检查 GitHub Releases 最新版，结果走 ok/err 回调 → {hasUpdate, current, latest, url, note} */
+    @JavascriptInterface
+    fun checkUpdate(reqId: Int) {
+        executor.execute {
+            try {
+                val url = "https://api.github.com/repos/$updateRepo/releases/latest"
+                val body = Http.get(url)
+                val o = JSONObject(body)
+                val tag = o.optString("tag_name", "")
+                if (tag.isEmpty()) {
+                    err(reqId, "仓库不存在或无 Release")
+                    return@execute
+                }
+                val latest = tag.removePrefix("v")
+                val current = appVersionName()
+                ok(reqId, JSONObject().apply {
+                    put("hasUpdate", versionCompare(latest, current) > 0)
+                    put("current", current)
+                    put("latest", latest)
+                    put("url", o.optString("html_url", "https://github.com/$updateRepo/releases"))
+                    put("note", o.optString("body", "").take(500))
+                })
+            } catch (e: Exception) {
+                err(reqId, e.message ?: "网络错误")
+            }
+        }
+    }
+
+    /** 用系统浏览器打开链接 */
+    @JavascriptInterface
+    fun openUrl(reqId: Int, url: String) {
+        try {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+            ok(reqId, null)
+        } catch (e: Exception) {
+            err(reqId, "无法打开浏览器: ${e.message}")
         }
     }
 
@@ -2051,7 +2118,7 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
         "output_dir", "threads", "preferCodec", "preferAudio", "downloadMode",
         "skipSubtitle", "skipCover", "skipAi", "skipMux", "downloadDanmaku",
         "videoAscending", "audioAscending", "forceHttp", "batchQn",
-        "delayPerPage", "filePattern", "clearOnExit", "theme"
+        "delayPerPage", "filePattern", "clearOnExit", "theme", "debug_server", "check_update"
     )
 
     @JavascriptInterface
@@ -2074,6 +2141,16 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
             }
             "threads" -> TaskManager.threads = value.toIntOrNull() ?: 8
             "delayPerPage" -> TaskManager.interTaskDelay = 0  // API限速已移除，忽略延迟设置
+            "debug_server" -> {
+                // 调试服务器开关：开启即启动 19865 端口 HTTP 服务，关闭即停
+                if (value == "true") {
+                    com.bbdown.app.core.DebugServer.start(context)
+                    Logger.i("Bridge", "调试服务器已开启")
+                } else {
+                    com.bbdown.app.core.DebugServer.stop()
+                    Logger.i("Bridge", "调试服务器已关闭")
+                }
+            }
         }
         ok(reqId)
     }
@@ -2107,6 +2184,8 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
         j.put("filePatternCollection", prefs.getString("filePatternCollection", "{collectionIndex}. {pageTitle}"))
         j.put("filePatternCollectionMultiPage", prefs.getString("filePatternCollectionMultiPage", "{collectionIndex}. {videoTitle} P{pageNumber}"))
         j.put("clearOnExit", prefs.getString("clearOnExit", "false"))
+        j.put("debug_server", prefs.getString("debug_server", "false"))
+        j.put("check_update", prefs.getString("check_update", "true"))
         ok(reqId, j)
     }
 
@@ -2123,6 +2202,8 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
         "filePatternCollection" -> "{collectionIndex}. {pageTitle}"
         "filePatternCollectionMultiPage" -> "{collectionIndex}. {videoTitle} P{pageNumber}"
         "clearOnExit" -> "false"
+        "debug_server" -> "false"
+        "check_update" -> "true"
         "output_dir" -> defaultOutputDir(context).absolutePath
         else -> ""
     }

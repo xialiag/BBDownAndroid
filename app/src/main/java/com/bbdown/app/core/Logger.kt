@@ -7,6 +7,17 @@ import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.ConcurrentLinkedDeque
 
+/** 一条带全局自增 seq 的日志(seq 供调试服务器增量拉取) */
+data class LogLine(
+    val seq: Long,
+    val time: String,
+    val level: String,
+    val tag: String,
+    val msg: String,
+) {
+    override fun toString(): String = "[$time][$level][$tag] $msg"
+}
+
 /**
  * 调试日志系统，记录应用运行日志，可在设置页面查看。
  * - 支持日志级别：D(调试) / I(信息) / W(警告) / E(错误)
@@ -15,7 +26,8 @@ import java.util.concurrent.ConcurrentLinkedDeque
  * - 支持导出到文件（带时间戳和分隔符）
  */
 object Logger {
-    private val logs = ConcurrentLinkedDeque<String>()
+    private val logs = ConcurrentLinkedDeque<LogLine>()
+    private val seqGen = java.util.concurrent.atomic.AtomicLong(1)
     private const val MAX_LOGS = 1000
     private val dateFormat = object : ThreadLocal<SimpleDateFormat>() {
         override fun initialValue() = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault())
@@ -62,8 +74,7 @@ object Logger {
 
     private fun add(level: String, tag: String, msg: String) {
         val time = dateFormat.get()!!.format(Date())
-        val entry = "[$time][$level][$tag] $msg"
-        logs.addLast(entry)
+        logs.addLast(LogLine(seqGen.getAndIncrement(), time, level, tag, msg))
         // 也输出到 logcat
         android.util.Log.println(when(level){
             "E" -> android.util.Log.ERROR
@@ -84,6 +95,19 @@ object Logger {
         val start = maxOf(0, all.size - count)
         return all.subList(start, all.size).joinToString("\n")
     }
+
+    /** 获取最近 N 条日志(结构化,调试服务器用) */
+    fun recentLines(count: Int): List<LogLine> {
+        val all = logs.toList()
+        val start = maxOf(0, all.size - count)
+        return all.subList(start, all.size)
+    }
+
+    /** 获取 seq 之后的增量日志(调试服务器长轮询用) */
+    fun since(seq: Long): List<LogLine> = logs.toList().filter { it.seq > seq }
+
+    /** 当前最大日志 seq(日志水位,无日志时为 0) */
+    fun maxSeq(): Long = logs.peekLast()?.seq ?: 0
 
     /** 获取日志条数 */
     fun getCount(): Int = logs.size

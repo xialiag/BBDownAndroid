@@ -3398,6 +3398,16 @@ function renderSettings(eb){
     </div>
     <div id="cache-size-line" style="font-size:11px;color:var(--fg-dim);margin-top:6px">加载中…</div>
     <h2>调试</h2>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px">
+      <div>
+        <div style="font-size:12px;font-weight:600">调试服务器</div>
+        <div style="font-size:10.5px;color:var(--fg-dim);margin-top:3px;line-height:1.5">端口 19865，同一 WiFi 浏览器访问 http://手机IP:19865/<br>可实时查看调试日志与崩溃日志（默认关闭）</div>
+      </div>
+      <div class="theme-switch" style="flex:0 0 auto">
+        <button class="${(s.debug_server==='true')?'active':''}" onclick="setDebugServer(true)">开启</button>
+        <button class="${(s.debug_server!=='true')?'active':''}" onclick="setDebugServer(false)">关闭</button>
+      </div>
+    </div>
     <div class="btn-row">
       <button class="btn btn-sec" onclick="showDebugLogs()">查看调试日志</button>
     </div>
@@ -3406,6 +3416,17 @@ function renderSettings(eb){
     <div id="crash-log-count-line" style="font-size:11px;color:var(--fg-dim);margin-bottom:8px">加载中…</div>
     <div class="btn-row">
       <button class="btn btn-sec" onclick="showCrashLogs()">查看崩溃日志</button>
+    </div>
+    <h2>更新</h2>
+    <div class="btn-row">
+      <button class="btn btn-sec" onclick="checkUpdateNow(false)">检查更新</button>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px">
+      <div>
+        <div style="font-size:12px;font-weight:600">启动时检查更新</div>
+        <div style="font-size:10.5px;color:var(--fg-dim);margin-top:2px">启动后静默检查 GitHub 新版本，有新版本才提示（仓库: xialiag/BBDownAndroid）</div>
+      </div>
+      <button class="btn ${s.check_update==='true'?'btn-primary':'btn-sec'}" style="flex:0 0 auto" onclick="saveSetting('check_update', (state.settings.check_update==='true')?'false':'true')">${s.check_update==='true'?'开':'关'}</button>
     </div>
   </div>`;
   // 进入设置页后主动检查权限状态，避免一直停留在"检查中…"
@@ -3442,6 +3463,23 @@ function toggleSettingsAdv(){
 }
 
 /* ===== 缓存管理 ===== */
+
+/* ---------- 检查 GitHub 更新（固定仓库 xialiag/BBDownAndroid） ---------- */
+async function checkUpdateNow(silent){
+  try{
+    const res = await callBridge('checkUpdate');
+    if(!res || !res.hasUpdate){ if(!silent) toast('当前已是最新版本 ('+(res&&res.current||'')+')','ok'); return; }
+    showConfirm({
+      icon: okIcon(),
+      title: '发现新版本 '+res.latest,
+      message: '当前版本: '+res.current+'\n\n'+(res.note||'').slice(0,400),
+      confirmText: '前往下载',
+      onConfirm: async ()=>{ try{ await callBridge('openUrl', res.url); }catch(e){ toast('无法打开浏览器','err'); } }
+    });
+  }catch(e){ if(!silent) toast('检查更新失败: '+e,'err'); }
+}
+/* 启动时静默检查（MainActivity 6 秒后触发，有新版本才提示） */
+window.__onCheckUpdate = function(){ checkUpdateNow(true); };
 
 /** 格式化文件大小 */
 function fmtCacheSize(bytes){
@@ -3778,6 +3816,12 @@ async function saveSetting(key, value){
     toast('已保存','ok');
     renderEditor();
   }catch(e){ toast('保存失败：'+e,'err'); }
+}
+
+/** 调试服务器开关（桥侧 setSetting 特判 key 启停 19865 端口服务） */
+async function setDebugServer(on){
+  await saveSetting('debug_server', on?'true':'false');
+  toast(on?'调试服务器已开启（19865）':'调试服务器已关闭', on?'ok':'');
 }
 
 async function saveOutputDir(){

@@ -98,6 +98,11 @@ class MainActivity : AppCompatActivity() {
         // 初始化任务管理器上下文
         TaskManager.init(this)
 
+        // 调试服务器（设置开关，默认关）：启动时若已开启则拉起 19865 端口 HTTP 服务
+        if (getSharedPreferences("bbdown_settings", Context.MODE_PRIVATE).getString("debug_server", "false") == "true") {
+            com.bbdown.app.core.DebugServer.start(this)
+        }
+
         // 请求电池优化白名单(仅首次):防止国产 ROM 杀后台导致下载中断
         requestBatteryOptimizationExemption()
         // 请求通知权限(Android 13+):前台服务通知需运行时授权，否则用户看不到下载进度
@@ -275,6 +280,15 @@ class MainActivity : AppCompatActivity() {
         // 注册内存压力回调，记录低内存事件便于排查闪退
         registerMemoryCallbacks()
 
+        // 启动后静默检查 GitHub 更新（开关默认开；有新版本才弹窗提示）
+        webView.postDelayed({
+            try {
+                if (getSharedPreferences("bbdown_settings", Context.MODE_PRIVATE).getString("check_update", "true") == "true") {
+                    webView.evaluateJavascript("try{window.__onCheckUpdate&&window.__onCheckUpdate();}catch(e){}", null)
+                }
+            } catch (_: Exception) {}
+        }, 6000)
+
         // 记录 FFmpeg 版本信息（编译时选择 + 运行时实际版本）
         FFmpegVersion.logVersionInfo()
 
@@ -440,6 +454,7 @@ class MainActivity : AppCompatActivity() {
         // 最终保存一次任务状态，并兜底清理（覆盖从最近任务划掉退出的场景）
         TaskManager.saveAll()
         doCleanupOnExit()
+        com.bbdown.app.core.DebugServer.stop()
         Logger.i("MainActivity", "onDestroy: 任务已保存")
     }
 }
