@@ -222,7 +222,7 @@ async function pollState(){
     document.getElementById('crashList').innerHTML = (s.crash||[]).length
       ? s.crash.map(c=>'<div class="crash-item"><a href="/crash?view='+esc(c.name)+'" target="_blank">'+esc(c.name)+'</a>'+
           '<span style="color:#969696">'+fmtSize(c.size)+' · '+fmtTime(c.mtime)+'</span>'+
-          '<button class="btn del" onclick="delCrash(\\''+esc(c.name)+'\\')">删除</button></div>').join('')
+          '<button class="btn del" onclick="delCrash(\''+esc(c.name)+'\')">删除</button></div>').join('')
       : '<div class="card" style="color:#969696">暂无崩溃日志</div>';
   }catch(e){}
 }
