@@ -488,6 +488,12 @@ object DownloadEngine {
     private fun selectVideo(play: PlayInfo, qn: String, preferCodec: String, ascending: Boolean): VideoTrack? {
         val vs = play.videos
         if (vs.isEmpty()) return null
+        // 0. auto=不指定清晰度：取全量最高可用（8K>杜比视界>HDR>4K>1080P，忽略编码偏好；升序模式取最低）
+        if (qn.equals("auto", true)) {
+            val sorted = vs.sortedBy { it.id.toIntOrNull() ?: 0 }
+            val chosen = if (ascending) sorted.firstOrNull() else sorted.lastOrNull()
+            if (chosen != null) { Logger.i("DownloadEngine", "视频选择: auto ${chosen.dfn}/${chosen.codecs}/${chosen.res}"); return chosen }
+        }
         // 1. 精确匹配 codec + 质量
         val exact = vs.find { it.codecs.equals(preferCodec, true) && it.id == qn }
         if (exact != null) { Logger.i("DownloadEngine", "视频选择: 精确匹配 ${exact.dfn}/${exact.codecs}/${exact.res}"); return exact }

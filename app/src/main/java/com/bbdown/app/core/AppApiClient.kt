@@ -236,9 +236,10 @@ object AppApiClient {
         pw.writeBool(8, true) // fourk
         pw.writeString(9, "main.ugc-video-detail.0.0")  // spmid
         pw.writeString(10, "main.my-history.0.0")        // fromSpmid
-        // preferCodecType: 0=NOCODE, 1=CODE264, 2=CODE265, 3=CODEAV1
+        // preferCodecType: 0=NOCODE(返回全部编码), 1=CODE264, 2=CODE265, 3=CODEAV1
+        // NOCODE 保证列表列全 avc/hevc/av1；否则 APP 端只返回单一编码，8K/杜比视界(HEVC)会缺失
         val codecType = when (encoding.uppercase()) {
-            "AV1" -> 3; "AVC", "H264" -> 1; else -> 2 // default HEVC (265)
+            "NOCODE", "ALL" -> 0; "AV1" -> 3; "AVC", "H264" -> 1; else -> 2 // default HEVC (265)
         }
         pw.writeEnum(12, codecType)
         return pw.toBytes()

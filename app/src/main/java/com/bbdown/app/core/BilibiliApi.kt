@@ -803,7 +803,8 @@ object BilibiliApi {
 
     /** APP 端 playurl（gRPC 协议，移植自 BBDown AppHelper.cs） */
     private fun getPlayInfoApp(aid: String, cid: String, epid: String, isBangumi: Boolean, qn: String, isCheese: Boolean): PlayInfo {
-        val encoding = if (isBangumi || isCheese) "HEVC" else "AVC"
+        // 请求全部编码(avc/hevc/av1)：保证流列表列全 8K/杜比视界等 HEVC 流；下载时由 preferCodec/auto 决定选哪条
+        val encoding = "NOCODE"
         val result = AppApiClient.getPlayInfo(
             aid = aid, cid = cid, epid = epid,
             isBangumi = isBangumi, isCheese = isCheese,

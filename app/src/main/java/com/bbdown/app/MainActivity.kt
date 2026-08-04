@@ -176,7 +176,6 @@ class MainActivity : AppCompatActivity() {
                         val inject = """<script>
 (function(){
   var _origAdd = AndroidBridge.addTask;
-  var _origBatch = AndroidBridge.addBatchTasks;
   function fmtSz(b){if(!b||b<=0)return'';if(b>=1048576)return'~'+(b/1048576).toFixed(2)+' MB';return'~'+(b/1024).toFixed(1)+' KB';}
   function fetchStreams(url,cb){
     var rid=++window._bseq;
@@ -232,24 +231,6 @@ class MainActivity : AppCompatActivity() {
       };
     });
   };
-  if(_origBatch){
-    AndroidBridge.addBatchTasks=function(reqId,tj){
-      try{var tasks=typeof tj==='string'?JSON.parse(tj):tj;}catch(e){return _origBatch.call(AndroidBridge,reqId,tj);}
-      if(!tasks.length)return _origBatch.call(AndroidBridge,reqId,tj);
-      fetchStreams(tasks[0].url||'',function(d){
-        if(d.videos.length<=3){_origBatch.call(AndroidBridge,reqId,tj);return;}
-        showOverlay(d,tasks[0]);
-        document.getElementById('sp-ok').onclick=function(){
-          var vids2=d.videos||[],auds2=d.audios||[];
-          var vid2=vids2.length?(window._csVal['sp_vs']||vids2[0].id):'';
-          var aid2=auds2.length?(window._csVal['sp_as']||auds2[0].id):'';
-          var upd=tasks.map(function(tk){tk.videoId=vid2;tk.preferAudio=aid2;return tk;});
-          document.getElementById('sp-ov').remove();
-          _origBatch.call(AndroidBridge,reqId,JSON.stringify(upd));
-        };
-      });
-    };
-  }
 })();
 </script>"""
                         val modified = original.replace(

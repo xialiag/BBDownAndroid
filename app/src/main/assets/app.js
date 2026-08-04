@@ -476,29 +476,6 @@ var _lastSwipeTime = 0;
 /* ---------- DOM 工具 ---------- */
 const el = id => document.getElementById(id);
 
-/* B站标准清晰度选项（用于批量下载等无法预获取playInfo的场景） */
-const QN_OPTIONS = [
-  ['auto','自动（最高可用）'],
-  ['127','8K 超高清'], ['126','杜比视界'], ['125','HDR 真彩'], ['120','4K 超清'],
-  ['116','1080P 高帧率'], ['112','1080P 高码率'], ['80','1080P 高清'],
-  ['74','720P 高帧率'], ['64','720P 高清'], ['32','480P 清晰'], ['16','360P 流畅']
-];
-/* 标准清晰度对应的分辨率/帧率/说明（批量场景无 playInfo，用于结构化双行展示）
-   批量下载无法逐个预取编码/码率，故仅显示分辨率与帧率，与下载页保持一致的下拉样式 */
-const QN_STREAM_INFO = {
-  'auto': { res:'智能选择最高可用清晰度' },
-  '127':  { res:'7680×4320' },
-  '126':  { res:'3840×2160 · 杜比视界' },
-  '125':  { res:'3840×2160 · HDR' },
-  '120':  { res:'3840×2160' },
-  '116':  { res:'1920×1080', fps:'60' },
-  '112':  { res:'1920×1080' },
-  '80':   { res:'1920×1080' },
-  '74':   { res:'1280×720', fps:'60' },
-  '64':   { res:'1280×720' },
-  '32':   { res:'852×480' },
-  '16':   { res:'640×360' }
-};
 const editorBody = () => el('editorBody');
 const sidebarBody = () => el('sidebarBody');
 
@@ -1326,6 +1303,7 @@ function buildAudioOpts(sources){
      modeKey, modeOpts, modeCb,
      vstreamKey, vstreamData, vstreamVal, vstreamCb,   // 视频流（可空）
      audioKey, audioOpts, audioVal, audioCb,             // 音频流下拉（可空；为空时回退药丸按钮）
+     showStreams,                                       // false=隐藏视频流/音频流选择（批量下载页）
      btnLabel, btnAction
    }
 */
@@ -1350,9 +1328,11 @@ function registerDownloadOpts(cfg){
 }
 
 function downloadOptsHTML(cfg){
+  // showStreams:false 时隐藏视频流/音频流选择（批量下载页不使用）
+  const showStreams = cfg.showStreams !== false;
   const hasVstream = cfg.vstreamData && cfg.vstreamData.length;
-  const showVstream = hasVstream && (state.downloadMode==='all' || state.downloadMode==='video_only');
-  const showAudio = state.downloadMode==='all' || state.downloadMode==='video_only' || state.downloadMode==='audio_only';
+  const showVstream = showStreams && hasVstream && (state.downloadMode==='all' || state.downloadMode==='video_only');
+  const showAudio = showStreams && (state.downloadMode==='all' || state.downloadMode==='video_only' || state.downloadMode==='audio_only');
   const useAudioDropdown = cfg.audioOpts && cfg.audioOpts.length;
   return `
     <div class="compact-opts">
@@ -1519,27 +1499,11 @@ function renderBatchFlow(eb){
   const failItems = results.filter(r=>!r.ok);
   // 注册并渲染共用下载选项（与下载页使用同一套 registerDownloadOpts/downloadOptsHTML）
   const modeOpts = [['all','完整下载(含字幕/封面/弹幕)'],['video_only','仅视频(有声不含附加)'],['audio_only','仅音频'],['subtitle_only','仅字幕'],['cover_only','仅封面'],['danmaku_only','仅弹幕']];
-  // 视频流：优先用 playInfo 真实流（与下载页完全一致），否则回退标准清晰度映射
-  const play = state.playInfo;
-  let batchVStreams = (play && play.videos) ? buildVStreamData(play.videos) : null;
-  if(!batchVStreams || !batchVStreams.length){
-    batchVStreams = buildVStreamData(QN_OPTIONS.map(([id,label])=>{
-      const info = QN_STREAM_INFO[id] || {};
-      return { id, dfn: label, codecs: '', fps: info.fps||'', res: info.res||'', bandwidth: '' };
-    }));
-  }
-  // 音频流：优先用 playInfo 真实流，否则回退标准选项
-  let batchAudioOpts = (play && play.audios) ? buildAudioOpts(play.audios) : null;
-  if(!batchAudioOpts || !batchAudioOpts.length){
-    batchAudioOpts = [['auto','自动（最高可用）'],['m4a','M4A'],['flac','FLAC'],['e-ac-3','E-AC-3']];
-  }
   const optsCfg = {
     modeKey: 'batch_mode', modeOpts: modeOpts,
     modeCb: (v)=>{ state.downloadMode=v; renderEditor(); },
-    vstreamKey: 'batch_vstream', vstreamData: batchVStreams, vstreamVal: state.batchQn,
-    vstreamCb: (v)=>{ state.batchQn=v; },
-    audioKey: 'batch_audio', audioOpts: batchAudioOpts, audioVal: state.selectedAudio,
-    audioCb: (v)=>{ state.selectedAudio=v; renderEditor(); },
+    // 批量下载不提供音视频流选择，统一按设置默认值下载
+    showStreams: false,
     btnLabel: '批量下载全部', btnAction: 'doBatchDownload()',
     isCollection: true
   };
@@ -3293,6 +3257,11 @@ function renderSettings(eb){
   window._csOpts['set_mode'] = setModeOpts;
   window._csVal['set_mode'] = s.downloadMode||'all';
   window._csCallback['set_mode'] = (v)=>{ saveSetting('downloadMode', v); state.downloadMode=v; };
+  // 批量清晰度：软偏好（auto=每个视频取该编码最高可用，固定值时缺失的视频自动回退自身最高可用）
+  const batchQnOpts = [['auto','自动（每视频取最高，含8K/杜比视界）'],['127','8K 超高清'],['126','杜比视界'],['125','HDR 真彩'],['120','4K 超清'],['116','1080P 高帧率'],['112','1080P 高码率'],['80','1080P 高清'],['74','720P 高帧率'],['64','720P 高清'],['32','480P 清晰'],['16','360P 流畅']];
+  window._csOpts['set_batchQn'] = batchQnOpts;
+  window._csVal['set_batchQn'] = s.batchQn||'auto';
+  window._csCallback['set_batchQn'] = (v)=>{ saveSetting('batchQn', v); state.batchQn = v; };
   eb.innerHTML = `<div class="view">
     <h1>设置</h1>
     <div class="theme-toggle">
@@ -3331,6 +3300,11 @@ function renderSettings(eb){
       <div class="compact-field">
         <label>默认模式</label>
         ${csHTML('set_mode', setModeOpts, s.downloadMode||'all')}
+      </div>
+      <div class="compact-field">
+        <label>批量清晰度</label>
+        ${csHTML('set_batchQn', batchQnOpts, s.batchQn||'auto')}
+        <div style="font-size:10px;color:var(--fg-dim);margin-top:4px">批量/合集下载的清晰度偏好：自动=每个视频独立取最高可用（含8K/杜比视界，不区分编码）；固定值=有则用，没有自动回退该视频最高可用</div>
       </div>
     </div>
     <div class="compact-field">
@@ -3907,6 +3881,7 @@ function renderHelp(eb){
     <p>· 下载线程数: 默认8线程加速</p>
     <p>· 编码优先级: AVC / HEVC / AV1</p>
     <p>· 音频优先级: m4a / flac</p>
+    <p>· 批量清晰度: 自动(每视频独立取最高,含8K/杜比视界)或固定清晰度(缺失自动回退)</p>
     <p>· 可跳过字幕、封面、AI字幕、混流等步骤</p>
     <p>· 强制HTTP: 将https地址转为http避免证书问题</p>
   </div>`;
