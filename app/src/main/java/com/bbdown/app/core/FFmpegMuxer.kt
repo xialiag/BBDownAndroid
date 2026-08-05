@@ -69,7 +69,8 @@ object FFmpegMuxer {
         desc: String = "",
         pubTime: Long = 0,
         coverFile: File? = null,
-        subtitles: List<SubtitleTrack> = emptyList()
+        subtitles: List<SubtitleTrack> = emptyList(),
+        transcodeAudioToAac: Boolean = false
     ): Boolean {
         Logger.i("FFmpegMuxer", "=== 混流开始: video=${videoFile.name}, audio=${audioFile?.name}, subs=${subtitles.size} ===")
         logMetadata(title, album, artist, desc, pubTime)
@@ -104,9 +105,14 @@ object FFmpegMuxer {
             cmd.add("-disposition:v:1"); cmd.add("attached_pic")
         }
 
-        // 流复制
+        // 流复制(FLAC 音频进 mp4 容器不受支持,转码 AAC 避免混流失败)
         cmd.add("-c:v"); cmd.add("copy")
-        cmd.add("-c:a"); cmd.add("copy")
+        if (transcodeAudioToAac) {
+            cmd.add("-c:a"); cmd.add("aac")
+            cmd.add("-b:a"); cmd.add("320k")
+        } else {
+            cmd.add("-c:a"); cmd.add("copy")
+        }
 
         // 元数据
         addMetadata(cmd, title, album, artist, desc, pubTime)

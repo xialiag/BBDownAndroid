@@ -3878,12 +3878,13 @@ function renderHelp(eb){
     <p style="font-size:10px;color:var(--fg-dim)">默认: 单P={pageTitle} | 多P={pageTitle} P{pageNumber} | 合集={collectionIndex}. {pageTitle} | 合集多P={collectionIndex}. {videoTitle} P{pageNumber}</p>
     <h2>其他设置</h2>
     <p>· 主题: 深色 / 浅色 / 跟随系统</p>
-    <p>· 下载线程数: 默认8线程加速</p>
-    <p>· 编码优先级: AVC / HEVC / AV1</p>
-    <p>· 音频优先级: m4a / flac</p>
+    <p>· 下载线程数: 默认8线程,可调4/16</p>
+    <p>· 视频编码: 自动下载时同清晰度优先 HEVC(硬解兼容好、码率适中),AV1/AVC 仅在 HEVC 不可用时选择</p>
+    <p>· 音频: 默认 M4A;Hi-Res FLAC 可在下载页「音频流」中选择——仅音频模式直接保存为 .flac,含视频模式自动转码 AAC 混流(FLAC 无法封装进 MP4)</p>
     <p>· 批量清晰度: 自动(每视频独立取最高,含8K/杜比视界)或固定清晰度(缺失自动回退)</p>
     <p>· 可跳过字幕、封面、AI字幕、混流等步骤</p>
     <p>· 强制HTTP: 将https地址转为http避免证书问题</p>
+    <p>· 下载稳定性: 分片失败自动重试并切换备用CDN节点,整条流失败自动降级同清晰度其他编码</p>
   </div>`;
 }
 

@@ -271,7 +271,9 @@ object DownloadEngine {
                                 desc = effectiveDesc,
                                 pubTime = effectivePubTime,
                                 coverFile = coverFile,
-                                subtitles = subTracks
+                                subtitles = subTracks,
+                                // FLAC 音频进 mp4 容器不受支持,转码 AAC(原版同样会遇到但无处理)
+                                transcodeAudioToAac = audio?.codecs == "FLAC"
                             )
                             vFile.delete()
                             aFile?.delete()
@@ -546,6 +548,11 @@ object DownloadEngine {
 
     private fun selectAudio(play: PlayInfo, prefer: String, ascending: Boolean): AudioTrack? {
         if (play.audios.isEmpty()) return null
+        // 0. 精确匹配流 id(单页流选择器选中的具体流,如 Hi-Res FLAC 的 30251)
+        play.audios.find { it.id == prefer }?.let {
+            Logger.i("DownloadEngine", "音频选择: 流id匹配 ${it.codecs}/${it.bandwidth}kbps")
+            return it
+        }
         // 1. 精确匹配编码
         val pref = when (prefer.uppercase()) {
             "FLAC" -> play.audios.filter { it.codecs == "FLAC" }
