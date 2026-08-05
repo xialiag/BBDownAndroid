@@ -146,7 +146,7 @@ object DownloadEngine {
                         // 下载视频（失败自动降级：同清晰度(id 相同)的其他编码流，如 AV1→HEVC/AVC）
                         var vFile: File? = null
                         if (task.downloadMode != "audio_only") {
-                            val videoCandidates = videoFallbackCandidates(play, selectedVideo)
+                            val videoCandidates = videoFallbackCandidates(play, selectedVideo, task.preferCodec)
                             var lastVErr: Exception? = null
                             for (video in videoCandidates) {
                                 try {
@@ -496,35 +496,52 @@ object DownloadEngine {
 
     // ==================== 选轨逻辑 ====================
 
-    /** 视频流降级候选：首选流在前，随后是同清晰度(id 相同)的其他编码流，优先 HEVC（硬解兼容好、码率适中），AVC 4K 码率爆炸放最后 */
-    private fun videoFallbackCandidates(play: PlayInfo, preferred: VideoTrack?): List<VideoTrack> {
+    /** 视频流降级候选：首选流在前，随后是同清晰度(id 相同)的其他编码流，按用户编码优先级排序 */
+    private fun videoFallbackCandidates(play: PlayInfo, preferred: VideoTrack?, preferCodec: String): List<VideoTrack> {
         if (preferred == null) return emptyList()
-        val codecRank = mapOf("HEVC" to 0, "AVC" to 1, "H264" to 1, "AV1" to 2)
+        val codecRank = mapOf("HEVC" to 1, "AVC" to 2, "H264" to 2, "AV1" to 3)
+        val prefKey = preferCodec.uppercase().let { if (it == "H264") "AVC" else it }
         val sameIdOthers = play.videos
             .filter { it.id == preferred.id && !it.codecs.equals(preferred.codecs, true) }
-            .sortedBy { codecRank[it.codecs.uppercase()] ?: 3 }
+            .sortedBy { v ->
+                if (v.codecs.equals(prefKey, true)) 0 else codecRank[v.codecs.uppercase()] ?: 9
+            }
         return listOf(preferred) + sameIdOthers
     }
 
     private fun selectVideo(play: PlayInfo, qn: String, preferCodec: String, ascending: Boolean): VideoTrack? {
         val vs = play.videos
         if (vs.isEmpty()) return null
-        // 0. auto=不指定清晰度：取全量最高可用（8K>杜比视界>HDR>4K>1080P，忽略编码偏好；升序模式取最低）
-        // 同清晰度存在多编码时优先 HEVC（手机硬解兼容性最好），其次 AVC，最后 AV1
+        // 0. auto=不指定清晰度：取全量最高可用（8K>杜比视界>HDR>4K>1080P；升序模式取最低）
+        // 同清晰度多编码时按用户编码优先级(preferCodec)排序:默认 AVC(与原版 BBDown 一致,兼容性最广)
         if (qn.equals("auto", true)) {
             val sorted = vs.sortedBy { it.id.toIntOrNull() ?: 0 }
             val top = if (ascending) sorted.firstOrNull() else sorted.lastOrNull()
             val chosen = if (top == null) null else {
                 val topId = top.id
                 val sameId = vs.filter { it.id == topId }
-                val codecRank = mapOf("HEVC" to 0, "AVC" to 1, "H264" to 1, "AV1" to 2)
-                sameId.minByOrNull { codecRank[it.codecs.uppercase()] ?: 3 }
+                val codecRank = mapOf("HEVC" to 1, "AVC" to 2, "H264" to 2, "AV1" to 3)
+                val prefKey = preferCodec.uppercase().let { if (it == "H264") "AVC" else it }
+                sameId.minByOrNull { v ->
+                    if (v.codecs.equals(prefKey, true)) 0 else codecRank[v.codecs.uppercase()] ?: 9
+                }
             }
             if (chosen != null) { Logger.i("DownloadEngine", "视频选择: auto ${chosen.dfn}/${chosen.codecs}/${chosen.res}"); return chosen }
         }
         // 1. 精确匹配 codec + 质量
         val exact = vs.find { it.codecs.equals(preferCodec, true) && it.id == qn }
         if (exact != null) { Logger.i("DownloadEngine", "视频选择: 精确匹配 ${exact.dfn}/${exact.codecs}/${exact.res}"); return exact }
+        // 1.5 目标清晰度存在但无偏好编码：清晰度优先，编码只是同清晰度内的偏好
+        //     避免"设4K+AVC、该视频4K只有HEVC时被降级到AVC 1080P"的隐式冲突
+        val sameQn = vs.filter { it.id == qn }
+        if (sameQn.isNotEmpty()) {
+            val codecRank = mapOf("HEVC" to 1, "AVC" to 2, "H264" to 2, "AV1" to 3)
+            val prefKey = preferCodec.uppercase().let { if (it == "H264") "AVC" else it }
+            val chosen = sameQn.minByOrNull { v ->
+                if (v.codecs.equals(prefKey, true)) 0 else codecRank[v.codecs.uppercase()] ?: 9
+            }
+            if (chosen != null) { Logger.i("DownloadEngine", "视频选择: 同清晰度其他编码 ${chosen.dfn}/${chosen.codecs}/${chosen.res}"); return chosen }
+        }
         // 2. 匹配 codec，质量回退到最接近的（升序取较低，降序取较高）
         val byCodec = vs.filter { it.codecs.equals(preferCodec, true) }.sortedBy { it.id.toIntOrNull() ?: 0 }
         if (byCodec.isNotEmpty()) {

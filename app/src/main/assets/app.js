@@ -3306,6 +3306,15 @@ function renderSettings(eb){
         ${csHTML('set_batchQn', batchQnOpts, s.batchQn||'auto')}
         <div style="font-size:10px;color:var(--fg-dim);margin-top:4px">批量/合集下载的清晰度偏好：自动=每个视频独立取最高可用（含8K/杜比视界，不区分编码）；固定值=有则用，没有自动回退该视频最高可用</div>
       </div>
+      <div class="compact-field">
+        <label>编码优先级</label>
+        <div class="pill-group">
+          <button class="${(s.preferCodec||'avc')==='avc'?'active':''}" onclick="saveSetting('preferCodec','avc'); state.selectedCodec='avc'">AVC</button>
+          <button class="${(s.preferCodec||'avc')==='hevc'?'active':''}" onclick="saveSetting('preferCodec','hevc'); state.selectedCodec='hevc'">HEVC</button>
+          <button class="${(s.preferCodec||'avc')==='av1'?'active':''}" onclick="saveSetting('preferCodec','av1'); state.selectedCodec='av1'">AV1</button>
+        </div>
+        <div style="font-size:10px;color:var(--fg-dim);margin-top:4px">自动选择时同清晰度优先的编码：AVC兼容最广(原版默认)、HEVC体积小硬解普及、AV1体积最小但老设备不支持</div>
+      </div>
     </div>
     <div class="compact-field">
         <label>API类型</label>
@@ -3879,7 +3888,7 @@ function renderHelp(eb){
     <h2>其他设置</h2>
     <p>· 主题: 深色 / 浅色 / 跟随系统</p>
     <p>· 下载线程数: 默认8线程,可调4/16</p>
-    <p>· 视频编码: 自动下载时同清晰度优先 HEVC(硬解兼容好、码率适中),AV1/AVC 仅在 HEVC 不可用时选择</p>
+    <p>· 视频编码: 自动下载时同清晰度按「编码优先级」选择,默认 AVC(与原版 BBDown 一致,兼容性最广);可在设置中切换 HEVC(体积小、硬解普及)/ AV1(体积最小,老设备不支持)</p>
     <p>· 音频: 默认 M4A;Hi-Res FLAC 可在下载页「音频流」中选择——仅音频模式直接保存为 .flac,含视频模式自动转码 AAC 混流(FLAC 无法封装进 MP4)</p>
     <p>· 批量清晰度: 自动(每视频独立取最高,含8K/杜比视界)或固定清晰度(缺失自动回退)</p>
     <p>· 可跳过字幕、封面、AI字幕、混流等步骤</p>
