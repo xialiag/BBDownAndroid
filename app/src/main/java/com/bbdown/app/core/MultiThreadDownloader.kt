@@ -42,10 +42,17 @@ class MultiThreadDownloader(
         val resumeFrom: Long get() = start + downloaded
     }
 
-    fun download(url: String, dest: File, referer: String = "https://www.bilibili.com/") {
-        val total = querySize(url)
+    fun download(url: String, dest: File, referer: String = "https://www.bilibili.com/") =
+        download(listOf(url), dest, referer)
+
+    /** 多 URL 下载：主 URL + B站 backup_url 备用节点。分片重试时按 attempt 轮换 URL，绕开故障 CDN 节点 */
+    fun download(urls: List<String>, dest: File, referer: String = "https://www.bilibili.com/") {
+        // 展开 http→https 回退（forceHttp 场景），去重保序
+        val candidates = expandCandidates(urls)
+        val url0 = candidates.first()
+        val total = querySize(candidates)
         if (total <= 0) {
-            singleThreadDownload(url, dest, referer)
+            singleThreadDownload(candidates, dest, referer)
             return
         }
         // 完整文件已存在，跳过
@@ -56,7 +63,7 @@ class MultiThreadDownloader(
 
         // 断点续传：加载或创建分片配置
         val cfgFile = File(dest.parentFile, dest.name + ".dl")
-        val segments = loadResumeConfig(cfgFile, url, total)
+        val segments = loadResumeConfig(cfgFile, url0, total)
             ?: createSegments(total)
 
         // 确保文件大小正确
@@ -73,7 +80,7 @@ class MultiThreadDownloader(
             if (seg.isComplete) continue // 该分片已完成，跳过
             val t = Thread {
                 try {
-                    downloadPart(url, dest, seg.resumeFrom, seg.end, referer) { delta ->
+                    downloadPart(candidates, dest, seg.resumeFrom, seg.end, referer) { delta ->
                         seg.downloaded += delta
                         val d = downloaded.addAndGet(delta)
                         val elapsed = (System.currentTimeMillis() - startTime) / 1000.0
@@ -103,7 +110,7 @@ class MultiThreadDownloader(
                     Thread.sleep(3000)
                     if (canceled) break
                     if (jobs.all { !it.isAlive }) break
-                    saveResumeConfig(cfgFile, url, total, segments)
+                    saveResumeConfig(cfgFile, url0, total, segments)
                 }
             } catch (_: InterruptedException) {
                 // 收到中断信号，正常退出
@@ -123,7 +130,7 @@ class MultiThreadDownloader(
 
         if (canceled) {
             // 保存进度以便下次续传
-            saveResumeConfig(cfgFile, url, total, segments)
+            saveResumeConfig(cfgFile, url0, total, segments)
             // 如果是错误导致的取消（非用户主动取消），抛出异常让上层处理
             val err = firstError.get()
             if (err != null) {
@@ -135,6 +142,22 @@ class MultiThreadDownloader(
         // 下载完成，删除配置文件
         cfgFile.delete()
         progress(total, total, 0)
+    }
+
+    /** 展开 URL 候选：每个 http:// 后补 https:// 版本(forceHttp 回退)，去重保序 */
+    private fun expandCandidates(urls: List<String>): List<String> {
+        val out = ArrayList<String>()
+        for (u in urls) {
+            if (u.isEmpty()) continue
+            if (u.startsWith("http://")) {
+                if (u !in out) out.add(u)
+                val https = "https://" + u.substring(7)
+                if (https !in out) out.add(https)
+            } else {
+                if (u !in out) out.add(u)
+            }
+        }
+        return out
     }
 
     /** 创建均匀分片 */
@@ -195,11 +218,9 @@ class MultiThreadDownloader(
         }
     }
 
-    private fun querySize(url: String): Long {
+    private fun querySize(urls: List<String>): Long {
         // PGC(番剧) CDN 会拒绝 HTTP 请求并返回 403；forceHttp 开启时自动回退 HTTPS 重试
-        val candidates = if (url.startsWith("http://"))
-            listOf(url, "https://" + url.substring(7)) else listOf(url)
-        for (currentUrl in candidates) {
+        for (currentUrl in urls) {
             var conn: HttpURLConnection? = null
             try {
                 conn = (URL(currentUrl).openConnection() as HttpURLConnection).apply {
@@ -221,7 +242,7 @@ class MultiThreadDownloader(
                 }
                 return conn.getHeaderField("Content-Length")?.toLongOrNull() ?: -1L
             } catch (_: Exception) {
-                // 当前 URL 失败，尝试下一个候选(HTTPS)
+                // 当前 URL 失败，尝试下一个候选(HTTPS/备用节点)
             } finally {
                 conn?.disconnect()
             }
@@ -230,14 +251,15 @@ class MultiThreadDownloader(
     }
 
     private fun downloadPart(
-        url: String, dest: File, start: Long, end: Long,
+        urls: List<String>, dest: File, start: Long, end: Long,
         referer: String, onProgress: (Long) -> Unit
     ) {
-        // PGC(番剧) CDN 会拒绝 HTTP 请求并返回 403；forceHttp 开启时自动回退 HTTPS 重试
-        val candidates = if (url.startsWith("http://"))
-            listOf(url, "https://" + url.substring(7)) else listOf(url)
         var lastError: Exception? = null
-        for (currentUrl in candidates) {
+        // 分片级重试：CDN 偶发提前断连(unexpected end of stream)时自愈；
+        // 每次重试轮换主/备用 CDN 节点(urls 已含 http→https 展开)，绕开单节点文件块故障
+        val maxAttempts = 3
+        for (attempt in 1..maxAttempts) {
+            val currentUrl = urls[(attempt - 1) % urls.size]
             var conn: HttpURLConnection? = null
             var raf: RandomAccessFile? = null
             var input: java.io.InputStream? = null
@@ -251,13 +273,14 @@ class MultiThreadDownloader(
                     setRequestProperty("Referer", referer)
                     if (cookie.isNotEmpty()) setRequestProperty("Cookie", cookie)
                     setRequestProperty("Range", "bytes=$start-$end")
+                    // 重试时禁用 keep-alive：Android HttpURLConnection 复用连接被 CDN 提前关闭会复现 unexpected end of stream
+                    if (attempt > 1) setRequestProperty("Connection", "close")
                 }
                 // 检查 HTTP 响应码，避免 FileNotFoundException 崩溃
                 val code = conn.responseCode
-                // HTTP 403：番剧 CDN 拒绝 HTTP，回退 HTTPS 重试
+                // HTTP 403：番剧 CDN 拒绝 HTTP，抛异常走重试轮换(列表已含 https 版本)
                 if (code == 403 && currentUrl.startsWith("http://")) {
-                    Logger.w("MultiThreadDownloader", "HTTP 403(番剧CDN拒绝HTTP)，回退HTTPS重试")
-                    continue
+                    throw java.io.IOException("HTTP 403(CDN拒绝HTTP)")
                 }
                 // 分片请求必须返回 206：若服务器忽略 Range 返回 200 全量，非首分片会写到错误偏移导致文件损坏
                 if (code != HttpURLConnection.HTTP_PARTIAL) {
@@ -277,9 +300,13 @@ class MultiThreadDownloader(
                 }
                 return  // 下载成功，退出
             } catch (e: Exception) {
-                // 取消/中断时快速退出，不再重试候选 URL
+                // 取消/中断时快速退出，不再重试
                 if (canceled) throw InterruptedException("下载已取消")
                 lastError = e
+                if (attempt < maxAttempts) {
+                    Logger.w("MultiThreadDownloader", "分片 $start-$end 第${attempt}次失败(${e.message}) url=${runCatching { URL(currentUrl).host }.getOrNull()}，${(attempt + 1) * 1000}ms后重试")
+                    try { Thread.sleep(1000L * attempt) } catch (_: InterruptedException) { throw InterruptedException("下载已取消") }
+                }
             } finally {
                 try { input?.close() } catch (_: Exception) {}
                 try { raf?.close() } catch (_: Exception) {}
@@ -291,12 +318,9 @@ class MultiThreadDownloader(
     }
 
     @Suppress("UNUSED_VARIABLE")
-    private fun singleThreadDownload(url: String, dest: File, referer: String) {
-        // PGC(番剧) CDN 会拒绝 HTTP 请求并返回 403；forceHttp 开启时自动回退 HTTPS 重试
-        val candidates = if (url.startsWith("http://"))
-            listOf(url, "https://" + url.substring(7)) else listOf(url)
+    private fun singleThreadDownload(urls: List<String>, dest: File, referer: String) {
         var lastError: Exception? = null
-        for (currentUrl in candidates) {
+        for (currentUrl in urls) {
             var conn: HttpURLConnection? = null
             var input: java.io.InputStream? = null
             try {

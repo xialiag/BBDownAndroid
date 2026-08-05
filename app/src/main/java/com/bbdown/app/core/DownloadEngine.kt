@@ -31,6 +31,8 @@ object DownloadEngine {
             task.errorMsg = ""
             task.downloadedBytes = 0
             task.totalBytes = 0
+            // 多P任务真实字节累计：已完成页的实际字节(跨页不重置,详情页显示真实大小而非虚拟基准)
+            var completedBytes = 0L
             val totalPages = task.pages.size.coerceAtLeast(1)
             val outputs = ArrayList<String>()
             // 合集/系列下载到以合集名命名的子文件夹；单视频直接下载到输出目录，不嵌套同名文件夹
@@ -137,35 +139,54 @@ object DownloadEngine {
                         // 累计本页实际下载字节数（AtomicLong：被 8 个分片线程并发写入，避免数据竞争）
                         val pageDownloaded = java.util.concurrent.atomic.AtomicLong(0)
                         val pageTotal = java.util.concurrent.atomic.AtomicLong(0)
+                        // 用播放信息中的 size 预置本页总大小(仅视频流有 size 字段,音频缺失由下载过程探测补充)
+                        val pageEstimate = selectedVideo?.size?.toLong() ?: 0
+                        if (pageEstimate > 0) pageTotal.set(pageEstimate)
 
-                        // 下载视频
+                        // 下载视频（失败自动降级：同清晰度(id 相同)的其他编码流，如 AV1→HEVC/AVC）
                         var vFile: File? = null
                         if (task.downloadMode != "audio_only") {
-                            val video = selectedVideo
-                            if (video != null) {
-                                task.status = DownloadTask.STATUS_DOWNLOADING
-                                // 混流模式用临时名（混流后删除）；skipMux 模式用最终名
-                                val vExt = if (task.skipMux) ".mp4" else ".vpart"
-                                vFile = File(workDir, "${baseName}${vExt}")
-                                if (video.size > 0) pageTotal.set(video.size.toLong())
-                                val vUrl = if (task.forceHttp && effectivePage.epid.isEmpty()) BilibiliApi.forceHttp(video.baseUrl) else video.baseUrl
-                                val vDownloader = MultiThreadDownloader(threads, task.cookie) { d, t, s ->
-                                    pageDownloaded.set((baseProgress * 1_000_000).toLong() + d)
-                                    if (t > 0) pageTotal.accumulateAndGet(t) { a, b -> maxOf(a, b) }
-                                    task.downloadedBytes = pageDownloaded.get()
-                                    task.totalBytes = (baseProgress * 1_000_000).toLong() + pageTotal.get()
-                                    task.speed = s
-                                    if (t > 0) task.progress = baseProgress + (d.toFloat() / t) * pageWeight * 0.9f
+                            val videoCandidates = videoFallbackCandidates(play, selectedVideo)
+                            var lastVErr: Exception? = null
+                            for (video in videoCandidates) {
+                                try {
+                                    task.status = DownloadTask.STATUS_DOWNLOADING
+                                    // 混流模式用临时名（混流后删除）；skipMux 模式用最终名
+                                    val vExt = if (task.skipMux) ".mp4" else ".vpart"
+                                    vFile = File(workDir, "${baseName}${vExt}")
+                                    val vUrl = if (task.forceHttp && effectivePage.epid.isEmpty()) BilibiliApi.forceHttp(video.baseUrl) else video.baseUrl
+                                    // 主 URL + B站 backup_url 备用节点(分片重试时轮换,绕开故障 CDN 节点)
+                                    val vUrls = listOf(vUrl) + video.backupUrls
+                                    val vDownloader = MultiThreadDownloader(threads, task.cookie) { d, t, s ->
+                                        pageDownloaded.set(d)
+                                        if (t > 0) pageTotal.accumulateAndGet(t) { a, b -> maxOf(a, b) }
+                                        task.downloadedBytes = completedBytes + pageDownloaded.get()
+                                        task.totalBytes = completedBytes + pageTotal.get()
+                                        task.speed = s
+                                        if (t > 0) task.progress = baseProgress + (d.toFloat() / t) * pageWeight * 0.9f
+                                    }
+                                    com.bbdown.app.TaskManager.registerDownloader(task.taskId, vDownloader)
+                                    vDownloader.download(vUrls, vFile)
+                                    // 下载完成后用实际文件大小更新
+                                    pageDownloaded.set(vFile.length())
+                                    task.downloadedBytes = completedBytes + pageDownloaded.get()
+                                    task.totalBytes = completedBytes + pageTotal.get()
+                                    if (task.status == DownloadTask.STATUS_CANCELED) { vFile.delete(); return }
+                                    if (task.status == DownloadTask.STATUS_PAUSED) return
+                                    outputs.add(vFile.absolutePath)
+                                    lastVErr = null
+                                    break
+                                } catch (e: Exception) {
+                                    lastVErr = e
+                                    vFile?.delete()
+                                    vFile = null
+                                    if (task.status == DownloadTask.STATUS_CANCELED || task.status == DownloadTask.STATUS_PAUSED) throw e
+                                    if (videoCandidates.size > 1) {
+                                        Logger.w("DownloadEngine", "视频流 ${video.codecs}/${video.dfn} 下载失败(${e.message})，降级尝试同清晰度其他编码")
+                                    }
                                 }
-                                com.bbdown.app.TaskManager.registerDownloader(task.taskId, vDownloader)
-                                vDownloader.download(vUrl, vFile)
-                                // 下载完成后用实际文件大小更新
-                                pageDownloaded.set((baseProgress * 1_000_000).toLong() + vFile.length())
-                                task.downloadedBytes = pageDownloaded.get()
-                                if (task.status == DownloadTask.STATUS_CANCELED) { vFile.delete(); return }
-                                if (task.status == DownloadTask.STATUS_PAUSED) return
-                                outputs.add(vFile.absolutePath)
                             }
+                            if (lastVErr != null) throw lastVErr
                         }
 
                         // 下载音频（所有模式都下载：all/video_only 需要混流，audio_only 直接输出）
@@ -180,18 +201,21 @@ object DownloadEngine {
                             val aTarget = File(workDir, "${baseName}${aSuffix}")
                             aFile = aTarget
                             val aUrl = if (task.forceHttp && effectivePage.epid.isEmpty()) BilibiliApi.forceHttp(audio.baseUrl) else audio.baseUrl
+                            // 主 URL + B站 backup_url 备用节点
+                            val aUrls = listOf(aUrl) + audio.backupUrls
                             val aPageBase = pageDownloaded.get()
                             val aDownloader = MultiThreadDownloader(threads, task.cookie) { d, t, s ->
                                 if (t > 0) pageTotal.accumulateAndGet(t) { a, b -> maxOf(a, b) }
-                                task.downloadedBytes = aPageBase + d
-                                task.totalBytes = (baseProgress * 1_000_000).toLong() + pageTotal.get()
+                                task.downloadedBytes = completedBytes + aPageBase + d
+                                task.totalBytes = completedBytes + pageTotal.get()
                                 task.speed = s
                                 if (t > 0) task.progress = baseProgress + pageWeight * 0.9f + (d.toFloat() / t) * pageWeight * 0.05f
                             }
                             com.bbdown.app.TaskManager.registerDownloader(task.taskId, aDownloader)
-                            aDownloader.download(aUrl, aTarget)
+                            aDownloader.download(aUrls, aTarget)
                             pageDownloaded.set(aPageBase + aTarget.length())
-                            task.downloadedBytes = pageDownloaded.get()
+                            task.downloadedBytes = completedBytes + pageDownloaded.get()
+                            task.totalBytes = completedBytes + pageTotal.get()
                             if (task.status == DownloadTask.STATUS_CANCELED) { vFile?.delete(); aTarget.delete(); return }
                             if (task.status == DownloadTask.STATUS_PAUSED) return
                             outputs.add(aTarget.absolutePath)
@@ -219,11 +243,13 @@ object DownloadEngine {
                             }
                             val outFile = File(workDir, "$outName.mp4")
                             // 先下载封面（如需嵌入元数据）— 使用原始URL，保留原始格式（与 DotNet 版一致）
+                            // 多P封面文件名带页码，避免各P互相覆盖
                             var coverFile: File? = null
                             if (!task.skipCover && task.pic.isNotEmpty()) {
                                 try {
                                     val bytes = BilibiliApi.downloadCover(task.pic)
-                                    coverFile = File(workDir, sanitize(task.title) + coverExtension(bytes))
+                                    val coverName = if (totalPages > 1) sanitize("${page.title} P${page.index}") else sanitize(task.title)
+                                    coverFile = File(workDir, coverName + coverExtension(bytes))
                                     coverFile.writeBytes(bytes)
                                 } catch (_: Exception) {}
                             }
@@ -263,18 +289,8 @@ object DownloadEngine {
                             // 替换输出列表为最终文件
                             outputs.removeAll { it.endsWith(".vpart") || it.endsWith(".apart") }
                             outputs.add(outFile.absolutePath)
-                            // 封面处理：video_only 模式下封面已嵌入，删除临时文件
-                            // all 模式下保留封面作为独立输出（与原版 BBDown 一致）
-                            if (task.downloadMode == "video_only") {
-                                coverFile?.let { cf ->
-                                    if (cf.exists()) {
-                                        cf.delete()
-                                        Logger.i("DownloadEngine", "已清除封面临时文件(已嵌入): ${cf.name}")
-                                    }
-                                }
-                            } else {
-                                coverFile?.let { outputs.add(it.absolutePath) }
-                            }
+                            // 封面按原版 BBDown 处理：仅作为混流输入尝试内嵌(attached_pic)，混流后删除临时文件
+                            coverFile?.let { cf -> if (cf.exists()) { cf.delete() } }
                         } else if (task.downloadMode == "audio_only" ||
                                    (task.downloadMode == "all" && task.skipMux) ||
                                    (task.downloadMode == "video_only" && task.skipMux)) {
@@ -282,12 +298,13 @@ object DownloadEngine {
                             // 仅 audio_only 或 skipMux 时走此分支（video_only+skipMux 时视频和音频分别注入）
                             if (task.status == DownloadTask.STATUS_CANCELED) return
                             if (task.status == DownloadTask.STATUS_PAUSED) return
-                            // 下载封面（用于嵌入元数据）
+                            // 下载封面（用于嵌入元数据）；多P文件名带页码
                             var coverFile: File? = null
                             if (!task.skipCover && task.pic.isNotEmpty()) {
                                 try {
                                     val bytes = BilibiliApi.downloadCover(task.pic)
-                                    coverFile = File(workDir, sanitize(task.title) + coverExtension(bytes))
+                                    val coverName = if (totalPages > 1) sanitize("${page.title} P${page.index}") else sanitize(task.title)
+                                    coverFile = File(workDir, coverName + coverExtension(bytes))
                                     coverFile.writeBytes(bytes)
                                 } catch (_: Exception) {}
                             }
@@ -335,35 +352,18 @@ object DownloadEngine {
                                     Logger.w("DownloadEngine", "音频元数据注入失败(不影响下载): ${e.message}")
                                 }
                             }
-                            // 元数据注入成功后清除封面临时文件和字幕临时文件
+                            // 元数据注入后字幕临时文件处理
+                            // 封面按原版 BBDown 处理：仅作为注入输入尝试内嵌，结束后删除临时文件
                             val metaInjected = videoMetaInjected || audioMetaInjected
+                            coverFile?.let { cf -> if (cf.exists()) { cf.delete() } }
                             if (metaInjected) {
-                                coverFile?.let { cf ->
-                                    if (cf.exists()) {
-                                        cf.delete()
-                                        Logger.i("DownloadEngine", "已清除封面临时文件(已嵌入): ${cf.name}")
-                                    }
-                                }
                                 // 字幕已嵌入，删除临时 .srt 文件（与原版 BBDown 一致）
                                 for (t in subTracks) {
                                     if (t.file.exists()) t.file.delete()
                                 }
-                            } else if ((task.downloadMode == "all" || task.downloadMode == "video_only") && task.skipMux) {
-                                // 元数据注入失败时保留封面和字幕文件作为独立输出（skipMux 模式）
-                                coverFile?.let { outputs.add(it.absolutePath) }
-                                for (t in subTracks) outputs.add(t.file.absolutePath)
                             } else {
-                                // video_only/audio_only 模式下元数据注入失败：删除封面临时文件
-                                coverFile?.let { cf ->
-                                    if (cf.exists()) {
-                                        cf.delete()
-                                        Logger.i("DownloadEngine", "已清除封面临时文件(元数据注入失败): ${cf.name}")
-                                    }
-                                }
-                                // 字幕注入失败也删除临时文件
-                                for (t in subTracks) {
-                                    if (t.file.exists()) t.file.delete()
-                                }
+                                // 元数据注入失败时保留字幕文件作为独立输出
+                                for (t in subTracks) outputs.add(t.file.absolutePath)
                             }
                         }
 
@@ -380,6 +380,8 @@ object DownloadEngine {
                             downloadDanmaku(effectivePage, workDir, baseName, outputs)
                         }
 
+                        // 页完成：本页实际字节累加到任务累计(跨页连续,详情页字节不跳变)
+                        completedBytes += pageDownloaded.get()
                         task.progress = baseProgress + pageWeight
                     }
                 }
@@ -485,13 +487,30 @@ object DownloadEngine {
 
     // ==================== 选轨逻辑 ====================
 
+    /** 视频流降级候选：首选流在前，随后是同清晰度(id 相同)的其他编码流，优先 HEVC（硬解兼容好、码率适中），AVC 4K 码率爆炸放最后 */
+    private fun videoFallbackCandidates(play: PlayInfo, preferred: VideoTrack?): List<VideoTrack> {
+        if (preferred == null) return emptyList()
+        val codecRank = mapOf("HEVC" to 0, "AVC" to 1, "H264" to 1, "AV1" to 2)
+        val sameIdOthers = play.videos
+            .filter { it.id == preferred.id && !it.codecs.equals(preferred.codecs, true) }
+            .sortedBy { codecRank[it.codecs.uppercase()] ?: 3 }
+        return listOf(preferred) + sameIdOthers
+    }
+
     private fun selectVideo(play: PlayInfo, qn: String, preferCodec: String, ascending: Boolean): VideoTrack? {
         val vs = play.videos
         if (vs.isEmpty()) return null
         // 0. auto=不指定清晰度：取全量最高可用（8K>杜比视界>HDR>4K>1080P，忽略编码偏好；升序模式取最低）
+        // 同清晰度存在多编码时优先 HEVC（手机硬解兼容性最好），其次 AVC，最后 AV1
         if (qn.equals("auto", true)) {
             val sorted = vs.sortedBy { it.id.toIntOrNull() ?: 0 }
-            val chosen = if (ascending) sorted.firstOrNull() else sorted.lastOrNull()
+            val top = if (ascending) sorted.firstOrNull() else sorted.lastOrNull()
+            val chosen = if (top == null) null else {
+                val topId = top.id
+                val sameId = vs.filter { it.id == topId }
+                val codecRank = mapOf("HEVC" to 0, "AVC" to 1, "H264" to 1, "AV1" to 2)
+                sameId.minByOrNull { codecRank[it.codecs.uppercase()] ?: 3 }
+            }
             if (chosen != null) { Logger.i("DownloadEngine", "视频选择: auto ${chosen.dfn}/${chosen.codecs}/${chosen.res}"); return chosen }
         }
         // 1. 精确匹配 codec + 质量
@@ -609,9 +628,10 @@ object DownloadEngine {
         try {
             val runtime = Runtime.getRuntime()
             val jvmFreeMB = (runtime.maxMemory() - runtime.totalMemory() + runtime.freeMemory()) / (1024 * 1024)
-            val nativeFreeMB = Debug.getNativeHeapFreeSize() / (1024 * 1024)
-            if (jvmFreeMB < 32 || nativeFreeMB < 8) {
-                Logger.w("DownloadEngine", "混流前内存偏低: JVM空闲=${jvmFreeMB}MB, Native空闲=${nativeFreeMB}MB, 触发GC")
+            // Debug.getNativeHeapFreeSize 在 64 位进程上只反映 arena 空闲块(可 mmap 扩展)，
+            // 不是真实可用内存，不再作为降级依据，仅检查 JVM 堆
+            if (jvmFreeMB < 32) {
+                Logger.w("DownloadEngine", "混流前 JVM 堆偏低: ${jvmFreeMB}MB, 触发GC")
                 System.gc()
                 try { Thread.sleep(100) } catch (_: InterruptedException) {}
             }

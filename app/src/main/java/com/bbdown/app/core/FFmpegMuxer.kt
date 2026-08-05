@@ -42,8 +42,10 @@ object FFmpegMuxer {
      */
     private const val MIN_NATIVE_HEAP_FREE_MB = 1L
 
-    /** native 堆"偏低"告警阈值（MB）：低于此值记录警告但仍执行。 */
-    private const val LOW_NATIVE_HEAP_WARN_MB = 8L
+    /** native 堆"偏低"告警阈值（MB）：Debug.getNativeHeapFreeSize 在 64 位进程上只反映
+     *  arena 内空闲块(可经 mmap 动态扩展)，非真实可用内存，故与 [MIN_NATIVE_HEAP_FREE_MB]
+     *  一致，仅在极端情况下告警，避免每次混流误报 */
+    private const val LOW_NATIVE_HEAP_WARN_MB = 1L
 
     /** 字幕文件信息（用于混流时嵌入） */
     data class SubtitleTrack(

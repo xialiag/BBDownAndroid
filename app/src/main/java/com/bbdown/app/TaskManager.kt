@@ -50,6 +50,10 @@ object TaskManager {
     // === 内存动态管理 ===
     /** 系统内存压力级别：0=正常, 1=偏低, 2=紧张, 3=危险, 4=临界 */
     @Volatile private var memPressureLevel = 0
+    /** 压力等级最后更新时间：Android 内存恢复后不会发回调，等级需按时间过期 */
+    @Volatile private var memPressureTs = 0L
+    /** 压力等级有效期：超过则视为已恢复（系统不再发回调） */
+    private const val MEM_PRESSURE_TTL_MS = 60_000L
     /** JVM 堆内存使用率上限（超过则降低并发） */
     private const val HEAP_WARN_RATIO = 0.75f
     private const val HEAP_CRITICAL_RATIO = 0.90f
@@ -83,12 +87,19 @@ object TaskManager {
             context.applicationContext.registerComponentCallbacks(object : ComponentCallbacks2 {
                 override fun onTrimMemory(level: Int) {
                     memPressureLevel = when {
+                        // 后台缓存 trim(40/60/80)：下载有前台服务保护，仅作参考
                         level >= ComponentCallbacks2.TRIM_MEMORY_COMPLETE -> 4
                         level >= ComponentCallbacks2.TRIM_MEMORY_MODERATE -> 3
                         level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND -> 2
+                        // 20=RUNNING_LOW 或 UI_HIDDEN(切后台必发,与内存无关)，按轻微处理
                         level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW -> 1
+                        // 前台运行压力(15)：系统整体内存偏低
+                        level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE -> 1
+                        // 前台临界(10)：系统即将杀进程，真正需要降并发保活
+                        level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL -> 2
                         else -> 0
                     }
+                    memPressureTs = System.currentTimeMillis()
                     if (memPressureLevel >= 2) {
                         Logger.w("TaskManager", "系统内存压力回调: level=$level, 调整等级=$memPressureLevel")
                         System.gc()
@@ -99,6 +110,7 @@ object TaskManager {
                 override fun onConfigurationChanged(newConfig: Configuration) {}
                 override fun onLowMemory() {
                     memPressureLevel = 4
+                    memPressureTs = System.currentTimeMillis()
                     Logger.w("TaskManager", "系统低内存回调，强制GC + 申请堆增长")
                     System.gc()
                     requestHeapGrowth("onLowMemory")
@@ -258,13 +270,16 @@ object TaskManager {
             maxThreads = maxThreads.coerceAtMost(heapLimit)
         } catch (_: Exception) {}
         // 信号3：系统 onTrimMemory 压力等级
-        val trimLimit = when (memPressureLevel) {
-            4 -> 1  // TRIM_MEMORY_COMPLETE：临界
-            3 -> 1  // TRIM_MEMORY_MODERATE：危险
-            2 -> 2  // TRIM_MEMORY_BACKGROUND：紧张
-            1 -> 4  // TRIM_MEMORY_RUNNING_LOW：偏低
-            else -> threads
-        }
+        // 注意：Android 内存恢复后不会发回调，等级必须在有效期内才生效，否则视为已恢复
+        val trimLimit = if (System.currentTimeMillis() - memPressureTs < MEM_PRESSURE_TTL_MS) {
+            when (memPressureLevel) {
+                4 -> 1  // TRIM_MEMORY_COMPLETE：临界
+                3 -> 1  // TRIM_MEMORY_MODERATE：危险
+                2 -> 2  // TRIM_MEMORY_BACKGROUND：紧张
+                1 -> 4  // TRIM_MEMORY_RUNNING_LOW：偏低
+                else -> threads
+            }
+        } else threads
         maxThreads = maxThreads.coerceAtMost(trimLimit)
         return maxThreads.coerceAtLeast(1) // 至少保证 1 线程
     }
