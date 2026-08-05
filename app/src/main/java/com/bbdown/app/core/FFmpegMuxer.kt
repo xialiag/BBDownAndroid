@@ -137,6 +137,9 @@ object FFmpegMuxer {
      *
      * 原版 BBDown 在 audioOnly 模式下清空 videoPath，仅保留 audioPath + pic
      * 在 videoOnly 模式下清空 audioPath，仅保留 videoPath + pic
+     *
+     * @param forceRemux 无元数据时也执行转封装：下载的音频是 fMP4 分片，
+     *    audio_only 模式(原版行为)必须转成标准容器；.flac 文件输出为标准 FLAC
      */
     fun injectMetadataOnly(
         file: File,
@@ -146,13 +149,14 @@ object FFmpegMuxer {
         desc: String = "",
         pubTime: Long = 0,
         coverFile: File? = null,
-        subtitles: List<SubtitleTrack> = emptyList()
+        subtitles: List<SubtitleTrack> = emptyList(),
+        forceRemux: Boolean = false
     ): Boolean {
         val hasMetadata = title.isNotEmpty() || artist.isNotEmpty() || desc.isNotEmpty() ||
                 album.isNotEmpty() || pubTime > 0
         val hasCover = coverFile != null && coverFile.exists() && coverFile.length() > 0
         val hasSubs = subtitles.any { it.file.exists() && it.file.length() > 0 }
-        if (!hasMetadata && !hasCover && !hasSubs) {
+        if (!hasMetadata && !hasCover && !hasSubs && !forceRemux) {
             Logger.i("FFmpegMuxer", "无元数据可注入，跳过")
             return true
         }
@@ -162,20 +166,24 @@ object FFmpegMuxer {
 
         val jpegCover = ensureJpegCover(coverFile)
         val isVideo = file.name.endsWith(".mp4")
+        val isFlac = file.name.endsWith(".flac")
         // 使用正确的临时文件扩展名，确保 FFmpeg 能识别输出格式
-        val ext = if (isVideo) ".mp4" else ".m4a"
+        val ext = when {
+            isVideo -> ".mp4"
+            isFlac -> ".flac"
+            else -> ".m4a"
+        }
         val outputFile = File(file.parentFile, file.nameWithoutExtension + ".meta" + ext)
 
         // 构建 FFmpeg 命令（完全按照原版 BBDown MuxAV 的参数顺序）
         val cmd = mutableListOf("-loglevel", "warning", "-y")
 
-        // 输入流
+        // 输入流(FLAC 容器无字幕轨道,字幕不参与)
         val inputCount = mutableListOf<File>()
         inputCount.add(file)
         if (jpegCover != null) {
             inputCount.add(jpegCover)
         }
-        // 注意：字幕不嵌入 MP4/M4A 流（与原版 BBDown 一致），只保存为独立 .srt 文件
         for (input in inputCount) {
             cmd.add("-i"); cmd.add(input.absolutePath)
         }
@@ -185,7 +193,7 @@ object FFmpegMuxer {
             cmd.add("-map"); cmd.add(i.toString())
         }
 
-        // 封面 attached_pic 处置
+        // 封面 attached_pic 处置(flac 容器同样支持,写入 PICTURE block)
         // 视频文件已有视频流 → 封面是 v:1
         // 音频文件无视频流 → 封面是 v:0
         if (jpegCover != null) {
@@ -197,14 +205,18 @@ object FFmpegMuxer {
         cmd.add("-c:v"); cmd.add("copy")
         cmd.add("-c:a"); cmd.add("copy")
 
-        // 元数据
+        // 元数据(FLAC 输出时写入 Vorbis 注释,ffmpeg 自动转换)
         addMetadata(cmd, title, album, artist, desc, pubTime)
 
-        // 输出封装参数（与原版 BBDown 完全一致）
+        // 输出封装参数（与原版 BBDown 完全一致；FLAC 用 flac 容器）
         cmd.add("-movflags"); cmd.add("faststart")
         cmd.add("-strict"); cmd.add("unofficial")
         cmd.add("-strict"); cmd.add("-2")
-        cmd.add("-f"); cmd.add("mp4")
+        if (isFlac) {
+            cmd.add("-f"); cmd.add("flac")
+        } else {
+            cmd.add("-f"); cmd.add("mp4")
+        }
         cmd.add("--"); cmd.add(outputFile.absolutePath)
 
         val success = execute(cmd, outputFile)

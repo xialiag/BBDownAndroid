@@ -337,11 +337,13 @@ object DownloadEngine {
                                     Logger.w("DownloadEngine", "视频元数据注入失败(不影响下载): ${e.message}")
                                 }
                             }
-                            // 对音频文件注入元数据+字幕（仅 m4a，FLAC 不支持 MP4 box 结构）
-                            // FFmpeg 会自动将 fragmented MP4 转为标准 MP4，无需单独 remux
+                            // 对音频文件注入元数据+字幕(m4a/E-AC-3 → 标准 mp4;FLAC → 标准 flac)
+                            // 下载的音频流是 fMP4 分片,audio_only 模式(原版行为)始终转封装为标准容器
+                            // FLAC 容器无字幕轨道,字幕不参与注入,保留为独立输出
                             var audioMetaInjected = false
                             val aFileNN = aFile
-                            if (aFileNN != null && aFileNN.exists() && aFileNN.name.endsWith(".m4a")) {
+                            val isFlacAudio = aFileNN != null && aFileNN.name.endsWith(".flac")
+                            if (aFileNN != null && aFileNN.exists() && (aFileNN.name.endsWith(".m4a") || isFlacAudio)) {
                                 task.status = DownloadTask.STATUS_MUXING
                                 try {
                                     checkMemoryBeforeMux()
@@ -350,7 +352,8 @@ object DownloadEngine {
                                         artist = effectiveUpperName, desc = effectiveDesc,
                                         pubTime = effectivePubTime,
                                         coverFile = coverFile,
-                                        subtitles = subTracks
+                                        subtitles = if (isFlacAudio) emptyList() else subTracks,
+                                        forceRemux = task.downloadMode == "audio_only"
                                     )
                                 } catch (e: Exception) {
                                     Logger.w("DownloadEngine", "音频元数据注入失败(不影响下载): ${e.message}")
@@ -360,13 +363,15 @@ object DownloadEngine {
                             // 封面按原版 BBDown 处理：仅作为注入输入尝试内嵌，结束后删除临时文件
                             val metaInjected = videoMetaInjected || audioMetaInjected
                             coverFile?.let { cf -> if (cf.exists()) { cf.delete() } }
-                            if (metaInjected) {
+                            // FLAC 无字幕轨道,字幕未嵌入,始终保留为独立输出
+                            val flacSubsNotEmbedded = isFlacAudio && subTracks.isNotEmpty()
+                            if (metaInjected && !flacSubsNotEmbedded) {
                                 // 字幕已嵌入，删除临时 .srt 文件（与原版 BBDown 一致）
                                 for (t in subTracks) {
                                     if (t.file.exists()) t.file.delete()
                                 }
                             } else {
-                                // 元数据注入失败时保留字幕文件作为独立输出
+                                // 元数据注入失败/FLAC 无字幕轨道时保留字幕文件作为独立输出
                                 for (t in subTracks) outputs.add(t.file.absolutePath)
                             }
                         }
