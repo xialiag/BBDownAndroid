@@ -138,10 +138,10 @@ object DownloadEngine {
 
                         // 累计本页实际下载字节数（AtomicLong：被 8 个分片线程并发写入，避免数据竞争）
                         val pageDownloaded = java.util.concurrent.atomic.AtomicLong(0)
-                        val pageTotal = java.util.concurrent.atomic.AtomicLong(0)
-                        // 用播放信息中的 size 预置本页总大小(仅视频流有 size 字段,音频缺失由下载过程探测补充)
-                        val pageEstimate = selectedVideo?.size?.toLong() ?: 0
-                        if (pageEstimate > 0) pageTotal.set(pageEstimate)
+                        // 视频/音频各自真实大小(下载开始时由探测一次确定后不再变化，
+                        // 避免 max() 漏算音频或中途跳变导致 totalBytes 变大/进度变慢)
+                        val pageVideoTotal = java.util.concurrent.atomic.AtomicLong(selectedVideo?.size?.toLong() ?: 0)
+                        val pageAudioTotal = java.util.concurrent.atomic.AtomicLong(0)
 
                         // 下载视频（失败自动降级：同清晰度(id 相同)的其他编码流，如 AV1→HEVC/AVC）
                         var vFile: File? = null
@@ -159,9 +159,9 @@ object DownloadEngine {
                                     val vUrls = listOf(vUrl) + video.backupUrls
                                     val vDownloader = MultiThreadDownloader(threads, task.cookie) { d, t, s ->
                                         pageDownloaded.set(d)
-                                        if (t > 0) pageTotal.accumulateAndGet(t) { a, b -> maxOf(a, b) }
+                                        if (t > 0) pageVideoTotal.set(t)
                                         task.downloadedBytes = completedBytes + pageDownloaded.get()
-                                        task.totalBytes = completedBytes + pageTotal.get()
+                                        task.totalBytes = completedBytes + pageVideoTotal.get() + pageAudioTotal.get()
                                         task.speed = s
                                         if (t > 0) task.progress = baseProgress + (d.toFloat() / t) * pageWeight * 0.9f
                                     }
@@ -169,8 +169,9 @@ object DownloadEngine {
                                     vDownloader.download(vUrls, vFile)
                                     // 下载完成后用实际文件大小更新
                                     pageDownloaded.set(vFile.length())
+                                    pageVideoTotal.set(vFile.length())
                                     task.downloadedBytes = completedBytes + pageDownloaded.get()
-                                    task.totalBytes = completedBytes + pageTotal.get()
+                                    task.totalBytes = completedBytes + pageVideoTotal.get() + pageAudioTotal.get()
                                     if (task.status == DownloadTask.STATUS_CANCELED) { vFile.delete(); return }
                                     if (task.status == DownloadTask.STATUS_PAUSED) return
                                     outputs.add(vFile.absolutePath)
@@ -205,17 +206,18 @@ object DownloadEngine {
                             val aUrls = listOf(aUrl) + audio.backupUrls
                             val aPageBase = pageDownloaded.get()
                             val aDownloader = MultiThreadDownloader(threads, task.cookie) { d, t, s ->
-                                if (t > 0) pageTotal.accumulateAndGet(t) { a, b -> maxOf(a, b) }
+                                if (t > 0) pageAudioTotal.set(t)
                                 task.downloadedBytes = completedBytes + aPageBase + d
-                                task.totalBytes = completedBytes + pageTotal.get()
+                                task.totalBytes = completedBytes + pageVideoTotal.get() + pageAudioTotal.get()
                                 task.speed = s
                                 if (t > 0) task.progress = baseProgress + pageWeight * 0.9f + (d.toFloat() / t) * pageWeight * 0.05f
                             }
                             com.bbdown.app.TaskManager.registerDownloader(task.taskId, aDownloader)
                             aDownloader.download(aUrls, aTarget)
                             pageDownloaded.set(aPageBase + aTarget.length())
+                            pageAudioTotal.set(aTarget.length())
                             task.downloadedBytes = completedBytes + pageDownloaded.get()
-                            task.totalBytes = completedBytes + pageTotal.get()
+                            task.totalBytes = completedBytes + pageVideoTotal.get() + pageAudioTotal.get()
                             if (task.status == DownloadTask.STATUS_CANCELED) { vFile?.delete(); aTarget.delete(); return }
                             if (task.status == DownloadTask.STATUS_PAUSED) return
                             outputs.add(aTarget.absolutePath)
