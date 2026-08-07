@@ -152,4 +152,68 @@ object Http {
             conn?.disconnect()
         }
     }
+
+    /**
+     * GET 并返回 (最终响应体, 全程收集的 Set-Cookie 头列表, 最终URL)。
+     * 手动跟随重定向，收集每一跳的 Set-Cookie —— 用于扫码登录 ticket 换取 SESSDATA
+     * (B站新版扫码登录: poll 返回的 crossDomain URL 只带 ticket, 需请求该 URL,
+     * 由 302 响应 Set-Cookie 下发真正的登录凭证)。
+     */
+    fun getWithSetCookies(url: String, extraCookie: String = "", referer: String = ""): Triple<String, List<String>, String> {
+        val cookies = mutableListOf<String>()
+        var currentUrl = url
+        var body = ""
+        var redirects = 0
+        var conn: HttpURLConnection? = null
+        try {
+            while (redirects < 8) {
+                conn = (URL(currentUrl).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    instanceFollowRedirects = false
+                    connectTimeout = 10000
+                    readTimeout = 30000
+                    setRequestProperty("User-Agent", userAgent)
+                    setRequestProperty("Accept-Encoding", "gzip, deflate")
+                    setRequestProperty("Accept", "*/*")
+                    setRequestProperty("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+                    val ck = joinCookie(cookie, extraCookie)
+                    if (ck.isNotEmpty()) setRequestProperty("Cookie", ck)
+                    if (referer.isNotEmpty()) setRequestProperty("Referer", referer)
+                }
+                val code = conn.responseCode
+                Logger.d("Http", "getWithSetCookies 响应码: $code url=$currentUrl")
+                // 收集本跳 Set-Cookie
+                var i = 0
+                while (true) {
+                    val name = conn.getHeaderFieldKey(i) ?: break
+                    if (name.equals("Set-Cookie", ignoreCase = true)) {
+                        conn.getHeaderField(i)?.let { cookies.add(it) }
+                    }
+                    i++
+                }
+                if (code in 300..399) {
+                    val loc = conn.getHeaderField("Location") ?: break
+                    currentUrl = if (loc.startsWith("http")) loc else URL(URL(currentUrl), loc).toString()
+                    redirects++
+                    conn.disconnect()
+                    conn = null
+                    continue
+                }
+                val stream: InputStream = if (code in 200..399) conn.inputStream else conn.errorStream ?: conn.inputStream
+                val encoding = conn.contentEncoding ?: ""
+                val decoded: InputStream = when (encoding) {
+                    "gzip" -> GZIPInputStream(stream)
+                    "deflate" -> InflaterInputStream(stream)
+                    else -> stream
+                }
+                body = decoded.use { String(it.readBytes(), Charsets.UTF_8) }
+                break
+            }
+        } catch (e: Exception) {
+            Logger.e("Http", "getWithSetCookies 失败 $url: ${e.javaClass.simpleName}: ${e.message}")
+        } finally {
+            conn?.disconnect()
+        }
+        return Triple(body, cookies, currentUrl)
+    }
 }

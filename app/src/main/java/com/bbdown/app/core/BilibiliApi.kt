@@ -177,17 +177,45 @@ object BilibiliApi {
             Logger.i("QrLogin", "登录成功! 开始提取Cookie...")
             // BBDown 方式：从 data.url 的 query 参数提取 cookie
             // data.url 形如: https://passport.biligame.com/crossDomain?DedeUserID=xxx&SESSDATA=xxx&bili_jct=xxx&...
+            // B站新版(2025+): query 只带 ticket, 需请求 crossDomain URL 由 Set-Cookie 下发凭证
             val crossDomainUrl = data.optString("url", "")
             val refresh = data.optString("refresh_token", "")
             Logger.d("QrLogin", "crossDomain URL: $crossDomainUrl")
 
-            val cookieStr = if (crossDomainUrl.contains("?")) {
+            var cookieStr = if (crossDomainUrl.contains("?")) {
                 // 截取 ? 之后的 query string，将 & 替换为 ; ，逗号转义
                 crossDomainUrl.substringAfter("?")
                     .replace("&", ";")
                     .replace(",", "%2C")
             } else {
                 ""
+            }
+
+            // 新版 ticket 机制：query 无 SESSDATA 时请求 crossDomain 换取
+            if (crossDomainUrl.contains("ticket=") && !cookieStr.contains("SESSDATA")) {
+                Logger.i("QrLogin", "检测到新版ticket机制, 请求crossDomain换取Cookie...")
+                try {
+                    val (body2, setCookies, finalUrl) = Http.getWithSetCookies(
+                        crossDomainUrl,
+                        referer = "https://passport.bilibili.com/"
+                    )
+                    Logger.d("QrLogin", "crossDomain 响应: ${body2.take(200)} 最终URL: $finalUrl")
+                    Logger.d("QrLogin", "crossDomain Set-Cookie: ${setCookies.joinToString(" || ")}")
+                    val wanted = setOf("SESSDATA", "DedeUserID", "DedeUserID__ckMd5", "bili_jct", "sid")
+                    val parts = mutableListOf<String>()
+                    for (sc in setCookies) {
+                        val name = sc.substringBefore("=").trim()
+                        if (name in wanted) parts.add(sc.substringBefore(";"))
+                    }
+                    if (parts.isNotEmpty()) {
+                        cookieStr = parts.joinToString("; ")
+                        Logger.i("QrLogin", "ticket换取的Cookie: ${cookieStr.take(80)}...")
+                    } else {
+                        Logger.w("QrLogin", "crossDomain未返回期望Set-Cookie, 回退query提取")
+                    }
+                } catch (e: Exception) {
+                    Logger.w("QrLogin", "crossDomain请求失败: ${e.message}, 回退query提取")
+                }
             }
             Logger.i("QrLogin", "提取的Cookie: ${cookieStr.take(80)}...")
             return LoginResult(code = 0, message = "登录成功", cookie = cookieStr, refreshCToken = refresh)
