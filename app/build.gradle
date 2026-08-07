@@ -6,7 +6,8 @@ plugins {
 // ==================== FFmpeg 版本选择（编译时） ====================
 // 通过 Gradle 属性选择 FFmpeg 版本：
 //   ./gradlew assembleRelease -PffmpegVersion=6   # FFmpeg 6.x（默认，稳定版）
-//   ./gradlew assembleRelease -PffmpegVersion=8   # FFmpeg 8.x（最新版）
+//   ./gradlew assembleRelease -PffmpegVersion=8   # FFmpeg 8.x
+//   ./gradlew assembleRelease -PffmpegVersion=9   # FFmpeg 9.x（最新版）
 //
 // AAR 文件查找顺序：
 //   1. libs/ffmpeg-kit-full-v{N}.aar  → 指定版本的 AAR
@@ -40,8 +41,8 @@ android {
         applicationId "com.bbdown.app"
         minSdk 24
         targetSdk 33
-        versionCode 121
-        versionName "2.0.6"
+        versionCode 122
+        versionName "2.0.7"
         vectorDrawables.useSupportLibrary = true
         ndk {
             abiFilters 'arm64-v8a'

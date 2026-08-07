@@ -4,12 +4,13 @@
 # 支持 Linux(x86_64 / ARM64) 与 Windows(Git Bash / MSYS2)
 #
 # 用法：
-#   ./build-apk.sh              # 构建两个 FFmpeg 版本 release
+#   ./build-apk.sh              # 构建全部 FFmpeg 版本 release
 #   ./build-apk.sh 6            # 仅 FFmpeg 6.x release
 #   ./build-apk.sh 8            # 仅 FFmpeg 8.x release
-#   ./build-apk.sh all          # 两个版本 release
+#   ./build-apk.sh 9            # 仅 FFmpeg 9.x release
+#   ./build-apk.sh all          # 全部版本 release
 #   ./build-apk.sh 6 debug      # FFmpeg 6.x debug
-#   ./build-apk.sh 8 debug      # FFmpeg 8.x debug
+#   ./build-apk.sh 9 debug      # FFmpeg 9.x debug
 #
 # 脚本自动处理：
 #   1. AAR 路径修复：FFmpeg 8 AAR 若含 Windows 反斜杠条目(jni\arm64-v8a\)，
@@ -25,14 +26,15 @@ set -e
 # ===== 版本映射(用于产物命名) =====
 FF6_LABEL="6.1.6"
 FF8_LABEL="8.1.2"
+FF9_LABEL="9.0"
 
 # ===== 参数解析 =====
 FFMPEG_VERSION="${1:-all}"
 BUILD_TYPE="${2:-release}"
 
 case "$FFMPEG_VERSION" in
-  6|8|all) ;;
-  *) echo "错误：FFmpeg 版本必须是 6、8 或 all(当前: $FFMPEG_VERSION)"; echo "用法：$0 [6|8|all] [debug|release]"; exit 1 ;;
+  6|8|9|all) ;;
+  *) echo "错误：FFmpeg 版本必须是 6、8、9 或 all(当前: $FFMPEG_VERSION)"; echo "用法：$0 [6|8|9|all] [debug|release]"; exit 1 ;;
 esac
 case "$BUILD_TYPE" in
   debug|release) ;;
@@ -130,7 +132,11 @@ VERSION_NAME="$(grep 'versionName' "${APP_DIR}/build.gradle" | sed 's/.*"\(.*\)"
 build_one() {
   local ver="$1"
   local label
-  [ "$ver" = "6" ] && label="$FF6_LABEL" || label="$FF8_LABEL"
+  case "$ver" in
+    6) label="$FF6_LABEL" ;;
+    8) label="$FF8_LABEL" ;;
+    9) label="$FF9_LABEL" ;;
+  esac
   echo ""
   echo ">>> 开始构建 FFmpeg v${ver} (${BUILD_TYPE}) ..."
   echo ""
@@ -187,7 +193,7 @@ print(n)
 
 # ===== 主流程 =====
 VERSIONS=()
-[ "$FFMPEG_VERSION" = "all" ] && VERSIONS=(6 8) || VERSIONS=("$FFMPEG_VERSION")
+[ "$FFMPEG_VERSION" = "all" ] && VERSIONS=(6 8 9) || VERSIONS=("$FFMPEG_VERSION")
 
 for v in "${VERSIONS[@]}"; do
   check_aar "$v"
