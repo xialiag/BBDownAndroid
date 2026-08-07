@@ -67,10 +67,11 @@ sdk.dir=/opt/android-sdk
 
 ```bash
 cd BBDownAndroid
-./build-apk.sh all release    # 一次构建 FFmpeg 6.x + 8.x
+./build-apk.sh all release    # 一次构建 FFmpeg 6.x + 8.x + 9.x
 # 或单个版本
 ./build-apk.sh 6 release
-./build-apk.sh 8 debug
+./build-apk.sh 8 release
+./build-apk.sh 9 debug
 ```
 
 产物在 `dist/`（自动命名 `BBDown-<版本>-ffmpeg-<FFmpeg版本>-<类型>.apk`），脚本自动执行
@@ -99,7 +100,7 @@ AAR 路径修复、native 库自检、签名验证。
 
 # 第四章：编译 FFmpegKit AAR（可选，仅需自定义 FFmpeg 时）
 
-> 构建 APK 只需要 `app/libs/` 下的预编译 AAR，本机已提供 v6/v8 两个版本，跳过本章不影响构建。
+> 构建 APK 只需要 `app/libs/` 下的预编译 AAR，本机已提供 v6/v8/v9 三个版本，跳过本章不影响构建。
 
 ## 4.1 获取源码与依赖
 
@@ -121,8 +122,10 @@ cp prebuilt/bundle-android-aar/ffmpeg-kit/ffmpeg-kit.aar \
    /path/to/BBDownAndroid/app/libs/ffmpeg-kit-full-v6.aar
 ```
 
-FFmpeg 8.x 需在 `ffmpeg-kit/src` 下替换 FFmpeg 源码为 8.x（`git checkout n8.1.2`）后重新编译，
-AAR 命名为 `ffmpeg-kit-full-v8.aar`。6.x 与 8.x 的源码结构/configure 选项差异由构建脚本自动处理。
+本仓库（xialiag/ffmpeg-kit）一套源码支持编译 6.x / 8.x / 9.x：构建脚本自动检测
+`src/ffmpeg` 的 RELEASE 文件选择正确的源文件与 configure 参数。8.x/9.x 共用同一套
+fftools 目录结构，6.x 为扁平文件名。编译后 AAR 命名为
+`ffmpeg-kit-full-v{6|8|9}.aar` 放入 `app/libs/`。
 
 ## 4.3 AAR 已知坑（重要）
 
@@ -153,10 +156,11 @@ PYEOF
 app/libs/
 ├── ffmpeg-kit-full-v6.aar   # FFmpeg 6.x（可选）
 ├── ffmpeg-kit-full-v8.aar   # FFmpeg 8.x（可选）
+├── ffmpeg-kit-full-v9.aar   # FFmpeg 9.x（可选）
 └── ffmpeg-kit-full.aar      # 向后兼容（视为 v6）
 ```
 
-至少需要一个。`app/build.gradle` 通过 `-PffmpegVersion=6|8` 动态选择。
+至少需要一个。`app/build.gradle` 通过 `-PffmpegVersion=6|8|9` 动态选择。
 
 ## 5.2 构建命令
 

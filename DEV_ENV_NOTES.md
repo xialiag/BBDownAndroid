@@ -44,12 +44,13 @@
 
 ## FFmpeg AAR
 
-两个预编译 AAR 已放入 `app/libs/`（来自 https://github.com/xialiag/ffmpeg-kit/releases/tag/v1.0 ）：
+三个预编译 AAR 已放入 `app/libs/`（来自 https://github.com/xialiag/ffmpeg-kit/releases ）：
 
 - `ffmpeg-kit-full-v6.aar` — FFmpeg 6.1.6（7.0 MB，稳定版/低内存）
-- `ffmpeg-kit-full-v8.aar` — FFmpeg 8.1.2（7.6 MB，编码器最新）
+- `ffmpeg-kit-full-v8.aar` — FFmpeg 8.1.2（7.6 MB）
+- `ffmpeg-kit-full-v9.aar` — FFmpeg 9.0（7.9 MB，编码器最新）
 
-编译时通过 `-PffmpegVersion=6|8` 选择其一，并注入 `BuildConfig.FFMPEG_VERSION`。
+编译时通过 `-PffmpegVersion=6|8|9` 选择其一，并注入 `BuildConfig.FFMPEG_VERSION`。
 
 ## 构建命令
 
@@ -63,27 +64,29 @@ $env:GRADLE_OPTS="-Dhttp.proxyHost=127.0.0.1 -Dhttp.proxyPort=7897 -Dhttps.proxy
 
 # 构建 FFmpeg 6.x debug APK
 .\gradlew.bat assembleDebug -PffmpegVersion=6
-# 构建 FFmpeg 8.x debug APK
+# 构建 FFmpeg 8.x / 9.x debug APK
 .\gradlew.bat assembleDebug -PffmpegVersion=8
+.\gradlew.bat assembleDebug -PffmpegVersion=9
 # release 版本
 .\gradlew.bat assembleRelease -PffmpegVersion=6
 .\gradlew.bat assembleRelease -PffmpegVersion=8
+.\gradlew.bat assembleRelease -PffmpegVersion=9
 ```
 
-产物：`app\build\outputs\apk\debug\app-debug-ff6.apk` / `app-debug-ff8.apk`
+产物：`app\build\outputs\apk\debug\app-debug-ff6.apk` / `app-debug-ff8.apk` / `app-debug-ff9.apk`
 （release 在 `apk\release\`）。**每次构建只保留当前版本的 APK，Gradle 会清理上一个**；请用
 `build-apk.sh` 构建（自动拷贝到 `dist\` 并重命名），或手动及时拷贝。
 
 一键脚本 `build-apk.sh`（bash，需 Git Bash）推荐用法：
 
 ```bash
-./build-apk.sh all release   # 一次构建 FFmpeg 6.x + 8.x 并拷贝到 dist/
+./build-apk.sh all release   # 一次构建 FFmpeg 6.x + 8.x + 9.x 并拷贝到 dist/
 ./build-apk.sh 6 debug       # 单个版本
 ```
 
 脚本在 Windows 下自动：检查代理配置（缺失时警告）、检查 local.properties 路径、
 修复 AAR 反斜杠路径（需 python）、构建后立即拷贝到 `dist\`、自检 native 库与签名。
-产物命名：`dist\BBDown-1.9.97-ffmpeg-6.1.6-release.apk` / `-8.1.2-`。
+产物命名：`dist\BBDown-<版本>-ffmpeg-6.1.6-release.apk` / `-8.1.2-` / `-9.0-`。
 
 ## 对仓库做的改动（均为可逆）
 

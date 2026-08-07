@@ -55,7 +55,7 @@ object FFmpegVersion {
         }
     }
 
-    /** 是否为 FFmpeg 8.x（编译时选择） */
+    /** 是否为 FFmpeg 8.x+（编译时选择；8.x/9.x 共用同一套 fftools 结构） */
     fun isV8(): Boolean = compiledMajorVersion >= 8
 
     /** 是否为 FFmpeg 6.x（编译时选择） */
@@ -63,10 +63,14 @@ object FFmpegVersion {
 
     /**
      * 获取可读的版本描述字符串，用于 UI 展示
-     * 例如："FFmpeg 6.1.6 (6.x)" 或 "FFmpeg 8.1.2 (8.x)"
+     * 例如："FFmpeg 6.1.6 (6.x)"、"FFmpeg 8.1.2 (8.x)" 或 "FFmpeg 9.0 (9.x)"
      */
     fun getDisplayString(): String {
-        val majorLabel = if (isV8()) "8.x" else "6.x"
+        val majorLabel = when {
+            compiledMajorVersion >= 9 -> "9.x"
+            compiledMajorVersion >= 8 -> "8.x"
+            else -> "6.x"
+        }
         return "FFmpeg $runtimeVersionString ($majorLabel)"
     }
 

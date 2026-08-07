@@ -51,10 +51,11 @@ Linux 无代理直连即可。若在 Windows 构建，需取消注释（见 DEV_
 
 ## FFmpeg AAR
 
-`app/libs/` 下两个预编译 AAR（来自 https://github.com/xialiag/ffmpeg-kit/releases/tag/v1.0 ）：
+`app/libs/` 下三个预编译 AAR（来自 https://github.com/xialiag/ffmpeg-kit/releases ）：
 
 - `ffmpeg-kit-full-v6.aar` — FFmpeg 6.1.6（7.0 MB）
 - `ffmpeg-kit-full-v8.aar` — FFmpeg 8.1.2（7.6 MB）
+- `ffmpeg-kit-full-v9.aar` — FFmpeg 9.0（7.9 MB）
 
 **已知坑**：v8 AAR 若 zip 条目为 Windows 反斜杠（`jni\arm64-v8a\...`），AGP 提取失败，
 APK 缺 native 库。`build-apk.sh` 构建前自动检测并用 python 重打包修复（正斜杠）。
@@ -68,16 +69,18 @@ unzip -l app/libs/ffmpeg-kit-full-v8.aar | grep 'jni/'   # 修复后应为 jni/a
 ```bash
 cd /root/BBDownAndroid
 
-# 一键构建两个版本（自动修复 AAR、自检、拷贝 dist/）
+# 一键构建全部版本（自动修复 AAR、自检、拷贝 dist/）
 ./build-apk.sh all release
 ./build-apk.sh 6 debug      # 单个版本
+./build-apk.sh 9 release
 
 # 直接 Gradle（产物会被下一次构建清理，务必及时拷贝）
 ./gradlew assembleRelease -PffmpegVersion=6
 ./gradlew assembleRelease -PffmpegVersion=8
+./gradlew assembleRelease -PffmpegVersion=9
 ```
 
-产物：`dist/BBDown-1.9.97-ffmpeg-6.1.6-release.apk`、`dist/BBDown-1.9.97-ffmpeg-8.1.2-release.apk`
+产物：`dist/BBDown-<版本>-ffmpeg-6.1.6-release.apk`、`-8.1.2-`、`-9.0-`
 （每个约 19-21 MB，含 9 个 `lib/arm64-v8a/*.so`）。
 
 ## 签名
@@ -92,12 +95,12 @@ Linux 下 `signV1V2` 任务自动执行（zipalign -p 页对齐 + apksigner v1+v
 # 推送代码
 git add -A && git commit -m "..." && git push origin main
 
-# 打 tag 并推送（每 FFmpeg 版本一个 tag，沿用既有约定）
-git tag v<版本>-ff6 && git tag v<版本>-ff8
-git push origin v<版本>-ff6 v<版本>-ff8
+# 打 tag 并推送（一个版本号一个 tag，三版本 APK 同放一个 release）
+git tag v<版本>
+git push origin v<版本>
 
 # 创建 release（GitHub API，需 token 在 ~/.git-credentials）
-# POST /repos/xialiag/BBDownAndroid/releases  + 上传 APK 到 release assets
+# POST /repos/xialiag/BBDownAndroid/releases  + 上传 3 个 APK 到 release assets
 ```
 
 仓库：https://github.com/xialiag/BBDownAndroid（token 用户 xialiag，凭据在 `~/.git-credentials`）。

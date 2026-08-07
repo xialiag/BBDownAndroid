@@ -215,7 +215,7 @@ window.__onBridge = function(reqId, result) {
 
 ## FFmpeg 版本适配
 
-项目支持 FFmpeg 6.x 和 8.x 两套版本，通过编译时参数选择：
+项目支持 FFmpeg 6.x、8.x、9.x 三套版本，通过编译时参数选择：
 
 ### 构建层（build.gradle）
 
@@ -232,13 +232,13 @@ buildConfigField "String", "FFMPEG_VERSION", "\"${ffmpegVersion}\""
 
 ```kotlin
 val compiledMajorVersion = BuildConfig.FFMPEG_VERSION.toInt()
-fun isV8() = compiledMajorVersion >= 8
+fun isV8() = compiledMajorVersion >= 8   // 8.x / 9.x 共用新 fftools 目录结构
 fun isV6() = compiledMajorVersion in 6..7
 ```
 
 ### Native 层（Android.mk）
 
-从预编译头文件检测 `LIBAVFORMAT_VERSION_MAJOR`，自动选择正确的源文件列表和编译参数。FFmpeg 8.x 使用目录结构（`fftools/ffmpeg.c`），6.x 使用扁平文件名（`fftools_ffmpeg.c`）。
+从预编译头文件检测 `LIBAVFORMAT_VERSION_MAJOR`，自动选择正确的源文件列表和编译参数。FFmpeg 8.x/9.x 使用目录结构（`fftools/ffmpeg.c`），6.x 使用扁平文件名（`fftools_ffmpeg.c`）。
 
 ## 扩展开发
 
@@ -301,7 +301,8 @@ adb logcat | grep -E "BBDown|FFmpegMuxer|DownloadEngine|BilibiliApi|TaskManager|
 |------|------|
 | `-PffmpegVersion=6` | 使用 FFmpeg 6.x AAR（默认） |
 | `-PffmpegVersion=8` | 使用 FFmpeg 8.x AAR |
+| `-PffmpegVersion=9` | 使用 FFmpeg 9.x AAR（最新） |
 | `debug` | Debug 构建（使用 release 签名，便于覆盖安装） |
 | `release` | Release 构建（v1+v2 双签名） |
 
-APK 输出文件名自动带版本标识：`app-release-ff6.apk` 或 `app-release-ff8.apk`。
+APK 输出文件名自动带版本标识：`app-release-ff6.apk` / `app-release-ff8.apk` / `app-release-ff9.apk`。

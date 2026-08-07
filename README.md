@@ -29,7 +29,7 @@ B站视频下载器 BBDown 的 Android 移植版，支持视频/音频/字幕/�
 
 ### FFmpeg 集成
 
-- 编译时选择 FFmpeg 6.x 或 8.x（`-PffmpegVersion=6/8`）
+- 编译时选择 FFmpeg 6.x / 8.x / 9.x（`-PffmpegVersion=6/8/9`）
 - 元数据注入完全移植自原版 BBDown（title/artist/album/desc/creation_time）
 - 字幕嵌入（`mov_text` 编码）、封面嵌入（`attached_pic`）
 - WebP 封面自动转 JPEG
@@ -41,8 +41,9 @@ B站视频下载器 BBDown 的 Android 移植版，支持视频/音频/字幕/�
 
 从 [Releases](../../releases) 页面下载对应版本的 APK：
 
-- `BBDown-x.x.x-ff6-release.apk` — 基于 FFmpeg 6.x（稳定版，内存占用低）
-- `BBDown-x.x.x-ff8-release.apk` — 基于 FFmpeg 8.x（最新版，编码器版本更新）
+- `BBDown-x.x.x-ffmpeg-6.1.6-release.apk` — 基于 FFmpeg 6.x（稳定版，内存占用低）
+- `BBDown-x.x.x-ffmpeg-8.1.2-release.apk` — 基于 FFmpeg 8.x
+- `BBDown-x.x.x-ffmpeg-9.0-release.apk` — 基于 FFmpeg 9.x（最新版，编码器版本更新）
 
 仅支持 arm64-v8a 架构设备（Android 7.0+）。
 
@@ -57,17 +58,20 @@ cd BBDownAndroid
 # 命名方式：
 #   ffmpeg-kit-full-v6.aar  → FFmpeg 6.x
 #   ffmpeg-kit-full-v8.aar  → FFmpeg 8.x
+#   ffmpeg-kit-full-v9.aar  → FFmpeg 9.x
 #   ffmpeg-kit-full.aar     → 向后兼容（视为 v6）
 
-# 构建（推荐：一键构建两个 FFmpeg 版本，自动拷贝产物到 dist/）
+# 构建（推荐：一键构建全部 FFmpeg 版本，自动拷贝产物到 dist/）
 ./build-apk.sh all release
 # 或单个版本
 ./build-apk.sh 6 release
-./build-apk.sh 8 debug
+./build-apk.sh 8 release
+./build-apk.sh 9 debug
 
-# 或使用 Gradle 直接构建（注意：两次构建会互相清理 apk 目录，产物需及时拷贝）
+# 或使用 Gradle 直接构建（注意：多次构建会互相清理 apk 目录，产物需及时拷贝）
 ./gradlew assembleRelease -PffmpegVersion=6
 ./gradlew assembleRelease -PffmpegVersion=8
+./gradlew assembleRelease -PffmpegVersion=9
 ```
 
 详细的环境搭建说明（Windows 原生 / Linux x86_64 / Linux ARM64）见
