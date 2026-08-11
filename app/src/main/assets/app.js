@@ -447,6 +447,8 @@ const state = {
   _upperTotal: 0,
   _upperReturnView: '',  // 进入UP投稿视频时的来源视图，退出时返回该视图
   _upperView: 'list', // 'list' or 'detail'
+  _upperSelMode: false,    // UP投稿页批量选择模式（长按进入）
+  _upperSelected: null,    // UP投稿页批量选中的bvid集合(Set，可跨页保留)
   // 关注列表
   _followings: null,
   _followTotal: 0,
@@ -1889,6 +1891,8 @@ function exitUpperSpace(){
   state._upperVipStatus = 0;
   state._upperPage = 1;
   state._upperTotal = 0;
+  state._upperSelMode = false;
+  state._upperSelected = new Set();
   const returnView = state._upperReturnView || 'search';
   state._upperReturnView = '';
   if(state.currentView !== returnView){
@@ -1920,11 +1924,23 @@ function renderUpperVideoList(eb){
   const page = state._upperPage;
   const pageSize = 30;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const selMode = !!state._upperSelMode;
+  const selSet = state._upperSelected || new Set();
 
   const upperNameHtml = renderUpperName(state._upperName, state._upperVipType, state._upperVipStatus, '');
   eb.innerHTML = `<div class="view">
     ${subHeader(upperNameHtml+'的投稿', "exitUpperSpace()", true)}
-    <p class="lead">${total > 0 ? total + ' 个投稿' : videos.length + ' 个投稿'}</p>
+    ${selMode ? `
+      <div class="compact-row" style="margin-bottom:10px">
+        <span id="upperSelCount" style="font-size:12px;color:var(--fg-dim)">已选 ${selSet.size} 个</span>
+        <span style="flex:1"></span>
+        <button class="btn btn-sec" style="font-size:11px;padding:5px 10px" onclick="toggleAllUpperChecks(true)">全选本页</button>
+        <button class="btn btn-sec" style="font-size:11px;padding:5px 10px" onclick="toggleAllUpperChecks(false)">取消全选</button>
+        <button class="btn btn-primary upper-dl-btn" style="font-size:11px;padding:5px 12px" onclick="downloadSelectedUpperVideos()">下载选中 (${selSet.size})</button>
+        <button class="btn btn-sec" style="font-size:11px;padding:5px 10px" onclick="exitUpperSelectMode()">退出</button>
+      </div>
+      <p class="lead">${total > 0 ? total + ' 个投稿' : videos.length + ' 个投稿'} · 点击卡片勾选，可跨页选择</p>
+    ` : `<p class="lead">${total > 0 ? total + ' 个投稿' : videos.length + ' 个投稿'} · 长按视频可批量选择</p>`}
     ${videos.length === 0 ? '<div class="empty-state">该UP主暂无投稿视频</div>' :
       `<div class="vc-list">
         ${videos.map(v=>{
@@ -1936,7 +1952,12 @@ function renderUpperVideoList(eb){
             vipType: state._upperVipType || v.vipType || 0,
             vipStatus: state._upperVipStatus || v.vipStatus || 0
           });
-          return videoCardHTML(v2, {onclick:`downloadUpperVideo('${esc(v.bvid)}','${esc(v.title)}')`});
+          const bvid = v.bvid || '';
+          if(selMode){
+            // 选择模式：点击卡片切换勾选（videoCardHTML 检测到 checkboxData 自动绑定）
+            return videoCardHTML(v2, {checkboxData:{bvid: bvid, checked: selSet.has(bvid), onchange:'toggleUpperSelect(this)', extraClass:'upper-check'}});
+          }
+          return videoCardHTML(v2, {onclick:`downloadUpperVideo('${esc(bvid)}','${esc(v.title)}')`});
         }).join('')}
       </div>`
     }
@@ -1948,6 +1969,123 @@ function renderUpperVideoList(eb){
       </div>
     ` : ''}
   </div>`;
+  // 非选择模式下绑定长按手势（选择模式下点击卡片即勾选，无需长按）
+  if(!selMode) bindUpperLongPress(eb);
+}
+
+/* ===== UP投稿页长按批量选择 ===== */
+
+/** 长按进入批量选择模式并选中该视频 */
+function enterUpperSelectMode(bvid){
+  state._upperSelMode = true;
+  if(!state._upperSelected) state._upperSelected = new Set();
+  if(bvid) state._upperSelected.add(bvid);
+  toast('已进入批量选择模式，点击卡片勾选，可跨页选择','ok');
+  renderEditor();
+}
+
+/** 退出批量选择模式并清空已选 */
+function exitUpperSelectMode(){
+  state._upperSelMode = false;
+  state._upperSelected = new Set();
+  renderEditor();
+}
+
+/** 勾选切换：同步 Set 与计数（checkbox change 时触发） */
+function toggleUpperSelect(cb){
+  if(!state._upperSelected) state._upperSelected = new Set();
+  const bvid = cb.dataset.bvid;
+  if(!bvid) return;
+  if(cb.checked) state._upperSelected.add(bvid);
+  else state._upperSelected.delete(bvid);
+  updateUpperSelCount();
+}
+
+/** 全选/取消全选当前页（跨页选择需在各页分别全选，Set 全局保留） */
+function toggleAllUpperChecks(checked){
+  if(!state._upperSelected) state._upperSelected = new Set();
+  document.querySelectorAll('.upper-check').forEach(c=>{
+    c.checked = checked;
+    vcSyncCheckStyle(c);
+    const bvid = c.dataset.bvid;
+    if(bvid){
+      if(checked) state._upperSelected.add(bvid);
+      else state._upperSelected.delete(bvid);
+    }
+  });
+  updateUpperSelCount();
+}
+
+/** 更新选择计数与下载按钮文案 */
+function updateUpperSelCount(){
+  const count = state._upperSelected ? state._upperSelected.size : 0;
+  const countEl = el('upperSelCount');
+  if(countEl) countEl.textContent = `已选 ${count} 个`;
+  const dlBtn = document.querySelector('.upper-dl-btn');
+  if(dlBtn) dlBtn.textContent = `下载选中 (${count})`;
+}
+
+/** 绑定长按手势：按住 500ms 进入批量选择模式（手指移动超阈值则取消） */
+function bindUpperLongPress(container){
+  if(!container) return;
+  container.querySelectorAll('.vc-item').forEach(card=>{
+    let longPressTimer = null;
+    let startX = 0, startY = 0;
+    card.addEventListener('touchstart', e=>{
+      if(state._upperSelMode) return;
+      const t = e.touches[0];
+      startX = t.clientX; startY = t.clientY;
+      longPressTimer = setTimeout(()=>{
+        longPressTimer = null;
+        enterUpperSelectMode(card.dataset.bvid);
+      }, 500);
+    }, {passive:true});
+    card.addEventListener('touchmove', e=>{
+      if(!longPressTimer) return;
+      const t = e.touches[0];
+      // 手指移动超过阈值视为滚动/滑动，取消长按
+      if(Math.abs(t.clientX - startX) > 12 || Math.abs(t.clientY - startY) > 12){
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+      }
+    }, {passive:true});
+    const cancelLongPress = ()=>{
+      if(longPressTimer){ clearTimeout(longPressTimer); longPressTimer = null; }
+    };
+    card.addEventListener('touchend', cancelLongPress);
+    card.addEventListener('touchcancel', cancelLongPress);
+  });
+}
+
+/** 批量下载选中的投稿视频：复用 parseBatch 流式解析 → 批量下载页 */
+async function downloadSelectedUpperVideos(){
+  const bvids = state._upperSelected ? Array.from(state._upperSelected) : [];
+  if(bvids.length === 0){ toast('请至少选择一个视频','err'); return; }
+  // 保存UP主名用于创建子文件夹（与合集下载一致），退出选择模式
+  state._batchCollectionTitle = state._upperName || '';
+  state._upperSelMode = false;
+  state._upperSelected = new Set();
+  state._lastUrl = bvids.join(' ');
+  state.parsed = null; state.videoInfo = null; state.playInfo = null;
+  // 先切换视图再初始化批量状态：renderAddTask 会把空数组 batchResults 置为 null，
+  // 若先设 batchResults=[] 再 switchView 会导致后续 concat 抛异常
+  switchView('addtask');
+  state.batchResults = [];
+  editorBody().innerHTML = `<div class="view"><h1>批量下载</h1><div class="loading-pulse">${spinIcon()} 正在解析 ${bvids.length} 个视频… (<span id="batchProg">0</span>/${bvids.length})</div></div>`;
+  try{
+    await callBridgeProgress('parseBatch', bvids.join(' '), (prog)=>{
+      if(prog.items && prog.items.length){
+        state.batchResults = (state.batchResults||[]).concat(prog.items);
+      }
+      const progEl = document.getElementById('batchProg');
+      if(progEl) progEl.textContent = prog.processed || state.batchResults.length;
+      if(prog.done && state.currentView === 'addtask') renderEditor();
+    });
+    if(state.currentView === 'addtask' && (!state.batchResults || state.batchResults.length === 0)) renderEditor();
+  }catch(e){
+    toast('批量解析失败：'+e,'err');
+    if(state.currentView === 'addtask') renderEditor();
+  }
 }
 
 async function downloadUpperVideo(bvid, title){
@@ -2082,7 +2220,7 @@ function videoCardHTML(v, opts){
 
   const checkedCls = (opts.checkboxData && opts.checkboxData.checked && !opts.checkboxData.disabled) ? ' vc-checked' : '';
 
-  return `<div class="vc-item${hasClick ? '' : ' vc-item-static'}${checkedCls}"${clickAttr}>
+  return `<div class="vc-item${hasClick ? '' : ' vc-item-static'}${checkedCls}" data-bvid="${esc(bvid)}"${clickAttr}>
     ${coverWrap}
     <div class="vc-body">
       ${titleHtml}
@@ -4073,6 +4211,16 @@ async function pollNow(){
           state._tasksStatusSig = statusSig;
           renderTaskTabsBar();
           renderTaskList(sidebarBody());
+          // 主内容区在列表视图（移动端）下也渲染任务卡：状态变化（完成/失败/取消/暂停）
+          // 会改变分类成员与显示状态，必须同步刷新，否则已完成的任务仍显示旧进度条
+          const eb = editorBody();
+          if(eb && eb.querySelector('.sb-items')){
+            const filter = state._taskFilter || 'all';
+            const manageMode = state._taskManageMode;
+            eb.innerHTML = `<div class="sb-items main-task-list">${renderTaskItemsHTML(sortTasksFiltered(tasks, filter), manageMode)}</div>`;
+            bindTaskItemEvents(eb, manageMode);
+            applyCachedImages(eb);
+          }
         } else {
           // 纯进度变化 → 原地更新徽章，避免闪烁
           updateSidebarBadgesInPlace(tasks);

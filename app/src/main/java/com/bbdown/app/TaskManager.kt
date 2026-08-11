@@ -1,9 +1,12 @@
 package com.bbdown.app
 
+import android.app.Activity
 import android.app.ActivityManager
+import android.app.Application
 import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.res.Configuration
+import android.os.Bundle
 import com.bbdown.app.core.DownloadEngine
 import com.bbdown.app.core.DownloadTask
 import com.bbdown.app.core.Http
@@ -50,6 +53,9 @@ object TaskManager {
     // === 内存动态管理 ===
     /** 系统内存压力级别：0=正常, 1=偏低, 2=紧张, 3=危险, 4=临界 */
     @Volatile private var memPressureLevel = 0
+    /** 应用是否在前台。用于区分 TRIM_MEMORY_UI_HIDDEN(20) 与 TRIM_MEMORY_RUNNING_LOW(20)——
+     *  两者常量值相同，但 UI_HIDDEN 是切后台必发、与内存无关，必须忽略 */
+    @Volatile private var appForeground = true
     /** 压力等级最后更新时间：Android 内存恢复后不会发回调，等级需按时间过期 */
     @Volatile private var memPressureTs = 0L
     /** 压力等级有效期：超过则视为已恢复（系统不再发回调） */
@@ -78,6 +84,19 @@ object TaskManager {
     fun init(context: Context) {
         appContext = context.applicationContext
 
+        // 跟踪应用前台状态：用于区分 onTrimMemory 的 UI_HIDDEN(切后台) 与 RUNNING_LOW
+        try {
+            (appContext as? Application)?.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
+                override fun onActivityResumed(activity: Activity) { appForeground = true }
+                override fun onActivityPaused(activity: Activity) { appForeground = false }
+                override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
+                override fun onActivityStarted(activity: Activity) {}
+                override fun onActivityStopped(activity: Activity) {}
+                override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
+                override fun onActivityDestroyed(activity: Activity) {}
+            })
+        } catch (_: Exception) {}
+
         // 启动时打印堆内存限制，并尝试申请增长
         logHeapLimits("init")
         requestHeapGrowth("init")
@@ -86,12 +105,15 @@ object TaskManager {
         try {
             context.applicationContext.registerComponentCallbacks(object : ComponentCallbacks2 {
                 override fun onTrimMemory(level: Int) {
+                    // 20 级 = UI_HIDDEN(切后台必发) 与 RUNNING_LOW 同值。后台收到 20 一律视为 UI_HIDDEN，
+                    // 直接忽略（不覆盖已有等级、不刷新 TTL），下载由前台服务保护，真正的危机信号是 15/10 级
+                    if (!appForeground && level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) return
                     memPressureLevel = when {
                         // 后台缓存 trim(40/60/80)：下载有前台服务保护，仅作参考
                         level >= ComponentCallbacks2.TRIM_MEMORY_COMPLETE -> 4
                         level >= ComponentCallbacks2.TRIM_MEMORY_MODERATE -> 3
                         level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND -> 2
-                        // 20=RUNNING_LOW 或 UI_HIDDEN(切后台必发,与内存无关)，按轻微处理
+                        // 20=RUNNING_LOW：前台收到说明系统内存确实偏低；后台的 20 已在上方按 UI_HIDDEN 忽略
                         level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW -> 1
                         // 前台运行压力(15)：系统整体内存偏低
                         level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE -> 1
