@@ -449,6 +449,7 @@ const state = {
   _upperView: 'list', // 'list' or 'detail'
   _upperSelMode: false,    // UP投稿页批量选择模式（长按进入）
   _upperSelected: null,    // UP投稿页批量选中的bvid集合(Set，可跨页保留)
+  _viewScrolls: {},        // 各视图滚动位置缓存: {view: {editor, sidebar}}
   // 关注列表
   _followings: null,
   _followTotal: 0,
@@ -469,6 +470,7 @@ const state = {
   _taskSwipeAnchor: null, // 滑动选择锚点（上次滑动选中的任务ID，用于范围选择）
   _prevTaskStatus: null, // 上次详情页任务状态（用于检测状态变化）
   _taskDetailSig: '', // 详情页签名（检测进度/状态是否变化，避免无意义DOM更新导致闪烁）
+  _taskDetailSwitch: false, // 点击切换任务标记：详情页从顶部渲染而非保持滚动
   _firstPoll: true, // 首次轮询标志（启动时不自动选中任务，显示列表视图）
 };
 
@@ -519,7 +521,32 @@ function detectLayout(){
 }
 
 /* ---------- 视图切换 ---------- */
+/** 保存当前视图的滚动位置（切换走之前调用） */
+function saveViewScroll(){
+  if(!state._viewScrolls) state._viewScrolls = {};
+  const eb = editorBody(), sb = sidebarBody();
+  state._viewScrolls[state.currentView] = {
+    editor: eb ? eb.scrollTop : 0,
+    sidebar: sb ? sb.scrollTop : 0
+  };
+}
+
+/** 恢复指定视图的滚动位置（渲染完成后调用，rAF 二次校正应对图片加载引起的高度变化） */
+function restoreViewScroll(view){
+  const saved = state._viewScrolls && state._viewScrolls[view];
+  if(!saved) return;
+  const apply = ()=>{
+    const eb = editorBody(), sb = sidebarBody();
+    if(eb && saved.editor != null && saved.editor > 0) eb.scrollTop = saved.editor;
+    if(sb && saved.sidebar != null && saved.sidebar > 0) sb.scrollTop = saved.sidebar;
+  };
+  apply();
+  requestAnimationFrame(apply);
+}
+
 function switchView(view){
+  if(view === state.currentView) return;
+  saveViewScroll();
   state.currentView = view;
   document.querySelectorAll('.ab-btn').forEach(b=>b.classList.toggle('active', b.dataset.view===view));
   const titles = {explorer:'任务列表', addtask:'新建下载', search:'搜索', account:'账号', settings:'设置', help:'帮助'};
@@ -531,6 +558,7 @@ function switchView(view){
   }
   renderSidebar();
   renderEditor();
+  restoreViewScroll(view);
   if(view==='account') initAccountView();
   // 切换到任务列表时立即轮询一次，确保显示最新任务状态
   if(view === 'explorer'){
@@ -570,10 +598,13 @@ function renderTaskList(sb){
   }
 
   // 分类筛选栏与管理按钮由 renderTaskTabsBar() 统一渲染到 #tabs 栏
+  const prevTop = sb.scrollTop;
   sb.innerHTML = `<div class="sb-items">${renderTaskItemsHTML(filtered, manageMode)}</div>`;
 
   bindTaskItemEvents(sb, manageMode);
   applyCachedImages(sb);
+  // 重建后恢复滚动位置（轮询刷新/视图切换时列表不跳回顶部）
+  sb.scrollTop = prevTop;
 }
 
 /** 从 URL 中提取 BV 号 */
@@ -673,6 +704,7 @@ function bindTaskItemEvents(sb, manageMode){
         state.selectedTaskId = n.dataset.id;
         state._prevTaskStatus = null;
         state._taskDetailSig = '';
+        state._taskDetailSwitch = true; // 点击切换任务：详情页从顶部渲染
         // 仅更新选中状态，避免全量重建
         sb.querySelectorAll('.task-item.selected').forEach(el=>el.classList.remove('selected'));
         n.classList.add('selected');
@@ -1098,12 +1130,19 @@ function renderExplorer(eb){
     const filtered = sortTasksFiltered(tasks, filter);
     // tabs 栏：非管理模式显示分类筛选，管理模式显示管理按钮
     renderTaskTabsBar();
+    const prevTop = eb.scrollTop;
     eb.innerHTML = `<div class="sb-items main-task-list">${renderTaskItemsHTML(filtered, manageMode)}</div>`;
     bindTaskItemEvents(eb, manageMode);
     applyCachedImages(eb);
+    eb.scrollTop = prevTop;
     return;
   }
+  // 点击切换任务时从顶部渲染；轮询重建/切回视图时保持滚动位置
+  const keepDetailScroll = !state._taskDetailSwitch;
+  state._taskDetailSwitch = false;
+  const prevTop = keepDetailScroll ? eb.scrollTop : 0;
   renderTaskDetail(eb, sel);
+  if(keepDetailScroll) eb.scrollTop = prevTop;
 }
 
 function renderTaskDetail(eb, t){
@@ -4217,9 +4256,11 @@ async function pollNow(){
           if(eb && eb.querySelector('.sb-items')){
             const filter = state._taskFilter || 'all';
             const manageMode = state._taskManageMode;
+            const prevTop = eb.scrollTop;
             eb.innerHTML = `<div class="sb-items main-task-list">${renderTaskItemsHTML(sortTasksFiltered(tasks, filter), manageMode)}</div>`;
             bindTaskItemEvents(eb, manageMode);
             applyCachedImages(eb);
+            eb.scrollTop = prevTop;
           }
         } else {
           // 纯进度变化 → 原地更新徽章，避免闪烁
