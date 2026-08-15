@@ -27,6 +27,24 @@ object DebugServer {
     private val lock = Any()
     @Volatile private var appContext: android.content.Context? = null
 
+    /** 获取手机局域网 IPv4(遍历网络接口,取第一个 site-local 地址;失败回退 127.0.0.1) */
+    fun lanIp(): String {
+        try {
+            val en = java.net.NetworkInterface.getNetworkInterfaces()
+            while (en.hasMoreElements()) {
+                val ni = en.nextElement()
+                val addrs = ni.inetAddresses
+                while (addrs.hasMoreElements()) {
+                    val ia = addrs.nextElement()
+                    if (!ia.isLoopbackAddress && ia is java.net.Inet4Address && ia.isSiteLocalAddress) {
+                        return ia.hostAddress ?: continue
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+        return "127.0.0.1"
+    }
+
     fun start(ctx: android.content.Context) {
         synchronized(lock) {
             if (running) return
@@ -35,7 +53,8 @@ object DebugServer {
             Thread({
                 try {
                     server = ServerSocket(PORT, 8, InetAddress.getByName("0.0.0.0"))
-                    Logger.i("Debug", "调试服务器已启动: http://127.0.0.1:$PORT/ (电脑需同一WiFi用手机IP访问)")
+                    val ip = lanIp()
+                    Logger.i("Debug", "调试服务器已启动: http://$ip:$PORT/")
                     while (running) {
                         val sock = server?.accept() ?: break
                         Thread({ handle(sock) }, "DebugConn").apply { isDaemon = true; start() }
@@ -94,7 +113,8 @@ object DebugServer {
     private fun crashList(): List<File> {
         val dir = crashDir() ?: return emptyList()
         if (!dir.exists()) return emptyList()
-        return dir.listFiles { f -> f.name.startsWith("crash_") && f.name.endsWith(".txt") }
+        return dir.listFiles { f -> f.name.endsWith(".txt")
+            && (f.name.startsWith("crash_") || f.name.startsWith("native_crash_") || f.name.startsWith("native_signal_")) }
             ?.sortedByDescending { it.lastModified() } ?: emptyList()
     }
 

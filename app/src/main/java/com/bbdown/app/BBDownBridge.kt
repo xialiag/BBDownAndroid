@@ -2161,6 +2161,17 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
     }
 
     @JavascriptInterface
+    fun getDebugServerUrl(reqId: Int) {
+        val running = com.bbdown.app.core.DebugServer.isRunning()
+        if (!running) {
+            ok(reqId, JSONObject().put("running", false))
+            return
+        }
+        val ip = com.bbdown.app.core.DebugServer.lanIp()
+        ok(reqId, JSONObject().put("running", true).put("url", "http://$ip:${com.bbdown.app.core.DebugServer.PORT}/"))
+    }
+
+    @JavascriptInterface
     fun getAllSettings(reqId: Int) {
         val j = JSONObject()
         j.put("output_dir", prefs.getString("output_dir", defaultOutputDir(context).absolutePath))

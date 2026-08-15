@@ -41,8 +41,8 @@ android {
         applicationId "com.bbdown.app"
         minSdk 24
         targetSdk 33
-        versionCode 124
-        versionName "2.0.9"
+        versionCode 125
+        versionName "2.0.10"
         vectorDrawables.useSupportLibrary = true
         ndk {
             abiFilters 'arm64-v8a'

@@ -3471,7 +3471,7 @@ function renderSettings(eb){
       <div class="compact-field">
         <label>线程数</label>
         <div class="pill-group">
-          ${[4,8,16].map(n=>`<button class="${(s.threads||'8')==String(n)?'active':''}" onclick="saveSetting('threads','${n}')">${n}</button>`).join('')}
+          ${[4,8,16].map(n=>`<button data-pill-group="threads" data-pill-val="${n}" class="${(s.threads||'8')==String(n)?'active':''}" onclick="saveSetting('threads','${n}')">${n}</button>`).join('')}
         </div>
       </div>
       <div class="compact-field">
@@ -3486,9 +3486,9 @@ function renderSettings(eb){
       <div class="compact-field">
         <label>编码优先级</label>
         <div class="pill-group">
-          <button class="${(s.preferCodec||'avc')==='avc'?'active':''}" onclick="saveSetting('preferCodec','avc'); state.selectedCodec='avc'">AVC</button>
-          <button class="${(s.preferCodec||'avc')==='hevc'?'active':''}" onclick="saveSetting('preferCodec','hevc'); state.selectedCodec='hevc'">HEVC</button>
-          <button class="${(s.preferCodec||'avc')==='av1'?'active':''}" onclick="saveSetting('preferCodec','av1'); state.selectedCodec='av1'">AV1</button>
+          <button data-pill-group="codec" data-pill-val="avc" class="${(s.preferCodec||'avc')==='avc'?'active':''}" onclick="saveSetting('preferCodec','avc'); state.selectedCodec='avc'">AVC</button>
+          <button data-pill-group="codec" data-pill-val="hevc" class="${(s.preferCodec||'avc')==='hevc'?'active':''}" onclick="saveSetting('preferCodec','hevc'); state.selectedCodec='hevc'">HEVC</button>
+          <button data-pill-group="codec" data-pill-val="av1" class="${(s.preferCodec||'avc')==='av1'?'active':''}" onclick="saveSetting('preferCodec','av1'); state.selectedCodec='av1'">AV1</button>
         </div>
         <div style="font-size:10px;color:var(--fg-dim);margin-top:4px">自动选择时同清晰度优先的编码：AVC兼容最广(原版默认)、HEVC体积小硬解普及、AV1体积最小但老设备不支持</div>
       </div>
@@ -3496,10 +3496,10 @@ function renderSettings(eb){
     <div class="compact-field">
         <label>API类型</label>
         <div class="pill-group">
-          <button class="${(state._apiType||'web')==='web'?'active':''}" onclick="setApiTypeSetting('web')">WEB</button>
-          <button class="${(state._apiType||'web')==='tv'?'active':''}" onclick="setApiTypeSetting('tv')">TV</button>
-          <button class="${(state._apiType||'web')==='app'?'active':''}" onclick="setApiTypeSetting('app')">APP</button>
-          <button class="${(state._apiType||'web')==='intl'?'active':''}" onclick="setApiTypeSetting('intl')">国际版</button>
+          <button data-pill-group="api" data-pill-val="web" class="${(state._apiType||'web')==='web'?'active':''}" onclick="setApiTypeSetting('web')">WEB</button>
+          <button data-pill-group="api" data-pill-val="tv" class="${(state._apiType||'web')==='tv'?'active':''}" onclick="setApiTypeSetting('tv')">TV</button>
+          <button data-pill-group="api" data-pill-val="app" class="${(state._apiType||'web')==='app'?'active':''}" onclick="setApiTypeSetting('app')">APP</button>
+          <button data-pill-group="api" data-pill-val="intl" class="${(state._apiType||'web')==='intl'?'active':''}" onclick="setApiTypeSetting('intl')">国际版</button>
         </div>
         <div style="font-size:10px;color:var(--fg-dim);margin-top:4px">选择解析/下载使用的API类型</div>
       </div>
@@ -3561,10 +3561,10 @@ function renderSettings(eb){
     <div class="switch-row">
       <div class="sw-text">
         <div class="sw-label">调试服务器</div>
-        <div class="sw-desc">端口 19865，同一 WiFi 浏览器访问 http://手机IP:19865/ 实时查看调试日志与崩溃日志（默认关闭）</div>
+        <div class="sw-desc" id="debug-server-desc">端口 19865，开启后同一 WiFi 浏览器可访问实时日志与崩溃日志（默认关闭）</div>
       </div>
       <label class="switch">
-        <input type="checkbox" ${(s.debug_server||'false')==='true'?'checked':''} onchange="saveSetting('debug_server',this.checked?'true':'false')">
+        <input type="checkbox" ${(s.debug_server||'false')==='true'?'checked':''} onchange="saveSetting('debug_server',this.checked?'true':'false');setTimeout(updateDebugServerUrl,600)">
         <span class="slider"></span>
       </label>
     </div>
@@ -3598,7 +3598,25 @@ function renderSettings(eb){
   setTimeout(()=>loadLogStats(), 100);
   // 异步加载缓存大小统计
   setTimeout(()=>loadCacheStats(), 100);
+  // 异步加载调试服务器地址显示
+  setTimeout(()=>updateDebugServerUrl(), 60);
 }
+
+/** 更新设置页调试服务器地址描述(开启时显示真实局域网 IP) */
+async function updateDebugServerUrl(){
+  const el = document.getElementById('debug-server-desc');
+  if(!el) return;
+  try{
+    const res = await callBridge('getDebugServerUrl');
+    if(res && res.running && res.url){
+      el.textContent = `已开启：${res.url}（同一 WiFi 浏览器访问，实时日志与崩溃日志）`;
+    } else {
+      el.textContent = '端口 19865，开启后同一 WiFi 浏览器可访问实时日志与崩溃日志（默认关闭）';
+    }
+  }catch(e){
+    el.textContent = '端口 19865，开启后同一 WiFi 浏览器可访问实时日志与崩溃日志（默认关闭）';
+  }
+ }
 
 /** 加载并显示日志统计信息 */
 async function loadLogStats(){
@@ -3751,12 +3769,9 @@ async function setApiTypeSetting(apiType){
   try{
     await callBridge('setApiType', apiType);
     state._apiType = apiType;
-    toast('API类型已切换为：' + ({web:'WEB',tv:'TV',app:'APP',intl:'国际版'}[apiType]||apiType), 'ok');
-    renderEditor();
+    updatePillActive('api', apiType);
   }catch(e){ toast('切换API类型失败','err'); }
 }
-
-/** 加载API类型 */
 async function loadApiType(){
   try{
     const res = await callBridge('getApiType');
@@ -3884,14 +3899,14 @@ async function showCrashLogs(){
   const eb = editorBody();
   if(!eb){ toast('编辑区未就绪','err'); return; }
   eb.innerHTML = `<div class="view">
-    ${subHeader('崩溃日志', "switchView('settings')")}
+    ${subHeader('崩溃日志', "renderEditor()")}
     <div class="loading-pulse">${spinIcon()} 加载中…</div>
   </div>`;
   try{
     const logs = await callBridge('getCrashLogs');
     if(!logs || logs.length === 0){
       eb.innerHTML = `<div class="view">
-        ${subHeader('崩溃日志', "switchView('settings')")}
+        ${subHeader('崩溃日志', "renderEditor()")}
         <div class="empty-state">暂无崩溃日志</div>
       </div>`;
       return;
@@ -3913,7 +3928,7 @@ async function showCrashLogs(){
       </div>`;
     }).join('');
     eb.innerHTML = `<div class="view">
-      ${subHeader('崩溃日志', "switchView('settings')")}
+      ${subHeader('崩溃日志', "renderEditor()")}
       <p class="lead">共 ${logs.length} 个崩溃日志 · 总计 ${totalKB}KB（点击展开/折叠）</p>
       <div class="btn-row" style="margin-bottom:12px">
         <button class="btn btn-sec" onclick="showCrashLogs()">刷新</button>
@@ -3923,7 +3938,7 @@ async function showCrashLogs(){
     </div>`;
   }catch(e){
     eb.innerHTML = `<div class="view">
-      ${subHeader('崩溃日志', "switchView('settings')")}
+      ${subHeader('崩溃日志', "renderEditor()")}
       <div style="color:var(--error)">加载失败：${esc(String(e))}</div>
     </div>`;
   }
@@ -3970,26 +3985,34 @@ async function clearCrashLogs(){
   });
 }
 
+/** 仅更新同组 pill 按钮的 active 态(不重渲染整页) */
+function updatePillActive(group, val){
+  document.querySelectorAll(`[data-pill-group="${group}"]`).forEach(b=>{
+    b.classList.toggle('active', b.dataset.pillVal === String(val));
+  });
+}
+
+/** 保存设置:只更新控件自身状态,不重渲染整页(避免闪烁) */
 async function saveSetting(key, value){
   try{
     await callBridge('setSetting', key, value);
-    // 重新加载设置以获取可能被重定向的路径
-    const fresh = await callBridge('getAllSettings');
-    state.settings = fresh;
-    toast('已保存','ok');
-    renderEditor();
-  }catch(e){ toast('保存失败：'+e,'err'); }
+    if(!state.settings) state.settings = {};
+    state.settings[key] = value;
+    if(key === 'threads') updatePillActive('threads', value);
+    else if(key === 'preferCodec') updatePillActive('codec', value);
+    return true;
+  }catch(e){ toast('保存失败：'+e,'err'); return false; }
 }
-
-/** 调试服务器开关由设置页 switch 滑块直接 saveSetting('debug_server')，桥侧特判启停 */
 
 async function saveOutputDir(){
   const v = el('set_output_dir').value.trim();
   if(!v){ toast('请输入目录','err'); return; }
-  await saveSetting('output_dir', v);
-  // 如果路径被重定向了，提示用户
+  const savedOk = await saveSetting('output_dir', v);
+  if(!savedOk) return;
+  // 如果路径被重定向了，提示用户并回显实际生效路径
   const saved = state.settings['output_dir'] || '';
   if(saved !== v){
+    el('set_output_dir').value = saved;
     setTimeout(()=>toast('路径已自动重定向到应用私有存储（未授予文件访问权限，无法写入公共目录）','warn'), 500);
   } else {
     toast('下载目录已保存','ok');
