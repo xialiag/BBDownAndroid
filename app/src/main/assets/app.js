@@ -1,4 +1,4 @@
-/* ===== BBDown Android — 前端逻辑 v1.9.95 ===== */
+/* ===== BBDown Android — 前端逻辑 v2.0.11 ===== */
 /* 包含: 扫码登录、批量下载、多线程下载、任务管理、调试日志 */
 
 /* ---------- 原生桥接 Promise 封装 ---------- */
@@ -3467,6 +3467,13 @@ function renderSettings(eb){
         <button class="btn btn-sec" style="font-size:11px;padding:5px 12px;flex:0 0 auto" onclick="requestStoragePermission()">授予权限</button>
       </div>
     </div>
+    <div class="form-row">
+      <label class="field-label">电池优化</label>
+      <div id="batteryStatus" style="padding:10px 12px;background:var(--card-bg);border:1px solid var(--card-border);border-radius:8px;font-size:12px;display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <span id="batteryStatusText" style="color:var(--fg-dim)">检查中…</span>
+        <button class="btn btn-sec" style="font-size:11px;padding:5px 12px;flex:0 0 auto" onclick="requestBatteryExempt()">去授权</button>
+      </div>
+    </div>
     <div class="compact-opts">
       <div class="compact-field">
         <label>线程数</label>
@@ -3594,6 +3601,7 @@ function renderSettings(eb){
   </div>`;
   // 进入设置页后主动检查权限状态，避免一直停留在"检查中…"
   setTimeout(()=>checkStoragePermissionStatus(), 60);
+  setTimeout(refreshBatteryStatus, 60);
   // 异步加载日志统计
   setTimeout(()=>loadLogStats(), 100);
   // 异步加载缓存大小统计
@@ -3810,6 +3818,34 @@ async function requestStoragePermission(){
   }catch(e){
     state._permCheckPending = false;
     toast('打开权限设置失败：'+e,'err');
+  }
+}
+
+/* ===== 电池优化（设置页手动入口，防止国产 ROM 杀后台） ===== */
+async function refreshBatteryStatus(){
+  try{
+    const d = await callBridge('getBatteryExemptStatus');
+    const el = document.getElementById('batteryStatusText');
+    if(!el) return;
+    if(d && d.granted){
+      el.textContent = '已豁免，后台下载不受系统限制';
+      el.style.color = 'var(--accent)';
+    }else{
+      el.textContent = '未豁免，后台下载可能被系统杀死';
+      el.style.color = 'var(--fg-dim)';
+    }
+  }catch(e){
+    const el = document.getElementById('batteryStatusText');
+    if(el){ el.textContent = '检查失败'; el.style.color = 'var(--error)'; }
+  }
+}
+async function requestBatteryExempt(){
+  try{
+    await callBridge('requestBatteryExempt');
+    // 从系统授权页返回后刷新状态
+    setTimeout(refreshBatteryStatus, 1500);
+  }catch(e){
+    toast('打开电池优化设置失败：'+e,'err');
   }
 }
 

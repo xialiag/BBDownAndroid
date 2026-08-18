@@ -422,6 +422,47 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
         }
     }
 
+    // ==================== 电池优化(设置页手动入口) ====================
+
+    /** 查询是否已豁免电池优化 → {granted: bool} */
+    @JavascriptInterface
+    fun getBatteryExemptStatus(reqId: Int) {
+        try {
+            val pm = context.getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
+            ok(reqId, JSONObject().put("granted", pm.isIgnoringBatteryOptimizations(context.packageName)))
+        } catch (e: Exception) {
+            err(reqId, "查询电池优化状态失败: ${e.message}")
+        }
+    }
+
+    /** 请求加入电池优化白名单：拉起系统授权对话框；部分 ROM 不支持时退回电池优化设置页 */
+    @JavascriptInterface
+    fun requestBatteryExempt(reqId: Int) {
+        try {
+            val act = context as? android.app.Activity ?: run { err(reqId, "无 Activity"); return }
+            act.runOnUiThread {
+                try {
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                        act.startActivity(android.content.Intent(
+                            android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                            android.net.Uri.parse("package:${act.packageName}")))
+                    }
+                } catch (_: Exception) {
+                    try {
+                        act.startActivity(android.content.Intent(
+                            android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                    } catch (_: Exception) {
+                        err(reqId, "无法打开电池优化设置")
+                        return@runOnUiThread
+                    }
+                }
+                ok(reqId, JSONObject().put("asked", true))
+            }
+        } catch (e: Exception) {
+            err(reqId, "请求电池优化失败: ${e.message}")
+        }
+    }
+
     /** 分享崩溃日志文件（按文件名） */
     @JavascriptInterface
     fun shareCrashLogFile(reqId: Int, filename: String) {
