@@ -55,8 +55,14 @@ object FFmpegVersion {
         }
     }
 
-    /** 是否为 FFmpeg 8.x+（编译时选择；8.x/9.x 共用同一套 fftools 结构） */
-    fun isV8(): Boolean = compiledMajorVersion >= 8
+    /** 是否为 FFmpeg 8.x（编译时选择） */
+    fun isV8(): Boolean = compiledMajorVersion == 8
+
+    /** 是否为 FFmpeg 9.x（编译时选择） */
+    fun isV9(): Boolean = compiledMajorVersion >= 9
+
+    /** 是否为 FFmpeg 8.x+ 新 fftools 结构（8.x/9.x 共用同一套；需要按新旧结构差异化处理时用这个） */
+    fun isNewStructure(): Boolean = compiledMajorVersion >= 8
 
     /** 是否为 FFmpeg 6.x（编译时选择） */
     fun isV6(): Boolean = compiledMajorVersion in 6..7
@@ -83,7 +89,7 @@ object FFmpegVersion {
             append(", aar=${aarName}")
             append(", ffmpeg=${runtimeVersionString}")
             append(", kit=${kitVersionString}")
-            append(", isV8=${isV8()}")
+            append(", isV8=${isV8()}, isV9=${isV9()}")
         }
     }
 
