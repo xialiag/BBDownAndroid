@@ -1,4 +1,4 @@
-/* ===== BBDown Android — 前端逻辑 v2.0.11 ===== */
+/* ===== BBDown Android — 前端逻辑 v2.0.12 ===== */
 /* 包含: 扫码登录、批量下载、多线程下载、任务管理、调试日志 */
 
 /* ---------- 原生桥接 Promise 封装 ---------- */
@@ -3471,7 +3471,7 @@ function renderSettings(eb){
       <label class="field-label">电池优化</label>
       <div id="batteryStatus" style="padding:10px 12px;background:var(--card-bg);border:1px solid var(--card-border);border-radius:8px;font-size:12px;display:flex;align-items:center;justify-content:space-between;gap:8px">
         <span id="batteryStatusText" style="color:var(--fg-dim)">检查中…</span>
-        <button class="btn btn-sec" style="font-size:11px;padding:5px 12px;flex:0 0 auto" onclick="requestBatteryExempt()">去授权</button>
+        <button class="btn btn-sec" style="font-size:11px;padding:5px 12px;flex:0 0 auto" onclick="requestBatteryExempt()">授予权限</button>
       </div>
     </div>
     <div class="compact-opts">
@@ -3829,7 +3829,7 @@ async function refreshBatteryStatus(){
     if(!el) return;
     if(d && d.granted){
       el.textContent = '已豁免，后台下载不受系统限制';
-      el.style.color = 'var(--accent)';
+      el.style.color = 'var(--success)';
     }else{
       el.textContent = '未豁免，后台下载可能被系统杀死';
       el.style.color = 'var(--fg-dim)';
