@@ -1,4 +1,4 @@
-/* ===== BBDown Android — 前端逻辑 v2.0.13 ===== */
+/* ===== BBDown Android — 前端逻辑 v2.0.14 ===== */
 /* 包含: 扫码登录、批量下载、多线程下载、任务管理、调试日志 */
 
 /* ---------- 原生桥接 Promise 封装 ---------- */
@@ -564,6 +564,12 @@ function switchView(view){
   if(view === 'explorer'){
     try { forcePollNow(); } catch(e) {}
   }
+}
+
+/* 从收藏夹/关注等二级页返回账号主视图：currentView 仍为 'account'，switchView 会因短路提前返回，
+   必须强制重渲 account 视图（renderAccount 会重新加载关注列表与收藏夹卡片） */
+function backToAccount(){
+  renderEditor();
 }
 
 /* ---------- 侧边栏渲染 ---------- */
@@ -2990,7 +2996,7 @@ async function openFavFolder(mediaId, title, count){
 async function loadFavList(){
   const eb = editorBody();
   eb.innerHTML = `<div class="view">
-    ${subHeader(state._favFolderTitle, "switchView('account')")}
+    ${subHeader(state._favFolderTitle, "backToAccount()")}
     <p class="lead">${state._favTotal} 个视频 · 第 ${state._favPage} 页</p>
     <div class="loading-pulse">${spinIcon()} 加载中…</div>
   </div>`;
@@ -3000,7 +3006,7 @@ async function loadFavList(){
     state._favTotal = res.total || state._favTotal;
     renderFavListView();
   }catch(e){
-    eb.innerHTML = `<div class="view">${subHeader(state._favFolderTitle, "switchView('account')")}<div style="color:var(--error)">加载失败：${esc(String(e))}</div></div>`;
+    eb.innerHTML = `<div class="view">${subHeader(state._favFolderTitle, "backToAccount()")}<div style="color:var(--error)">加载失败：${esc(String(e))}</div></div>`;
   }
 }
 
@@ -3009,7 +3015,7 @@ function renderFavListView(){
   const items = state._favList || [];
   if(items.length === 0){
     eb.innerHTML = `<div class="view">
-      ${subHeader(state._favFolderTitle, "switchView('account')")}
+      ${subHeader(state._favFolderTitle, "backToAccount()")}
       <div class="empty-state">收藏夹为空</div>
     </div>`;
     return;
@@ -3017,7 +3023,7 @@ function renderFavListView(){
   const pageSize = 20;
   const totalPages = Math.ceil(state._favTotal / pageSize) || 1;
   eb.innerHTML = `<div class="view">
-    ${subHeader(state._favFolderTitle, "switchView('account')")}
+    ${subHeader(state._favFolderTitle, "backToAccount()")}
     <p class="lead">${state._favTotal} 个视频 · 第 ${state._favPage}/${totalPages} 页</p>
     <div class="compact-row" style="margin-bottom:12px">
       <button class="btn btn-sec" style="font-size:11px;padding:5px 10px" id="favToggleAllBtn" onclick="toggleFavAll()">全选</button>
@@ -3852,17 +3858,25 @@ async function requestBatteryExempt(){
 function colorizeLogs(raw){
   if(!raw) return '<span class="log-empty">(无日志)</span>';
   const lines = String(raw).split('\n');
+  // 跨行级别：日志 msg 内含换行时，续行无 [time][level][tag] 前缀，需继承前一行的级别颜色，避免换行后染色中断
+  let curLvl = '';
   return lines.map(line=>{
     const safe = esc(line);
     // 匹配 [HH:mm:ss.SSS][LEVEL][TAG] 格式
     const m = line.match(/^\[([\d:.]+)\]\[([DIWE])\]\[([^\]]+)\]/);
     if(m){
-      const lvl = m[1] ? m[2] : '';
+      const lvl = m[2];
+      curLvl = lvl;
       const time = m[1];
       const tag = m[3];
       const rest = safe.replace(/^\[[\d:.]+\]\[[DIWE]\]\[[^\]]+\]/, '');
       const lvlColor = lvl==='E'?'log-E':lvl==='W'?'log-W':lvl==='I'?'log-I':'log-D';
       return `<span class="log-line ${lvlColor}"><span class="log-time">[${time}]</span><span class="log-lvl log-lvl-${lvl}">[${lvl}]</span><span class="log-tag">[${esc(tag)}]</span>${rest}</span>`;
+    }
+    // 属于上一行日志的续行（msg 内换行）：沿用前一行的级别颜色
+    if(curLvl){
+      const lvlColor = curLvl==='E'?'log-E':curLvl==='W'?'log-W':curLvl==='I'?'log-I':'log-D';
+      return `<span class="log-line ${lvlColor}">${safe}</span>`;
     }
     // 匹配 BBDown 控制台输出中的关键词
     if(/错误|error|failed|失败|异常|exception|崩溃|crash/i.test(line) && !/已修复|已恢复|成功/i.test(line)){
