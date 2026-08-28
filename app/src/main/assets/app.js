@@ -1,4 +1,4 @@
-/* ===== BBDown Android — 前端逻辑 v2.0.14 ===== */
+/* ===== BBDown Android — 前端逻辑 v2.0.15 ===== */
 /* 包含: 扫码登录、批量下载、多线程下载、任务管理、调试日志 */
 
 /* ---------- 原生桥接 Promise 封装 ---------- */
@@ -2162,6 +2162,25 @@ function fmtCount(n){
   if(n >= 10000) return (n/10000).toFixed(1) + '万';
   return String(n);
 }
+/**
+ * 统一时长格式化：数字(秒) 或 字符串("10:30"/"126:30"/"1:02:03") → hh:mm:ss。
+ * 无法解析或空值返回 ''（不显示角标）。
+ */
+function fmtDuration(d){
+  let total;
+  if(typeof d === 'number'){
+    total = Math.floor(d);
+  } else if(typeof d === 'string' && d.trim() !== ''){
+    const parts = d.trim().split(':').map(x=>parseInt(x,10));
+    if(parts.some(isNaN) || parts.length < 2 || parts.length > 3) return '';
+    total = parts.length === 2 ? parts[0]*60 + parts[1] : parts[0]*3600 + parts[1]*60 + parts[2];
+  } else {
+    return '';
+  }
+  if(!(total > 0)) return '';
+  const p = n=>String(n).padStart(2,'0');
+  return `${p(Math.floor(total/3600))}:${p(Math.floor((total%3600)/60))}:${p(total%60)}`;
+}
 
 /**
  * 统一视频卡片HTML生成器，用于合集/批量/搜索/投稿/收藏等所有视频列表。
@@ -2184,13 +2203,8 @@ function videoCardHTML(v, opts){
   const title = v.title || v.url || '';
   const pic = v.pic || '';
   const bvid = v.bvid || v.url || '';
-  // duration 可能是字符串("10:30")或数字(秒)
-  let duration = v.duration;
-  if(typeof duration === 'number' && duration > 0){
-    const m = Math.floor(duration / 60);
-    const s = duration % 60;
-    duration = `${m}:${String(s).padStart(2,'0')}`;
-  }
+  // duration 可能是字符串("10:30"/"126:30")或数字(秒)，统一为 hh:mm:ss
+  const duration = fmtDuration(v.duration);
   // 发布时间：优先 pubdate > created > pubTime > favTime
   const pubdate = v.pubdate || v.created || v.pubTime || v.favTime || 0;
   // UP主信息
@@ -3041,14 +3055,9 @@ function renderFavListView(){
   applyCachedImages(eb);
 }
 
-function fmtTime2(sec){
-  const m = Math.floor(sec/60);
-  const s = sec%60;
-  return `${m}:${String(s).padStart(2,'0')}`;
-}
-
 async function downloadAllFav(){
   const checks = document.querySelectorAll('.fv-check:checked');
+  if(checks.length === 0){ toast('请至少选择一个视频','err'); return; }
   if(checks.length === 0){ toast('请至少选择一个视频','err'); return; }
   const bvids = Array.from(checks).map(c=>c.dataset.bvid);
   // 直接设置视图状态，不调用 switchView 避免触发 renderEditor 显示空的新建下载页
