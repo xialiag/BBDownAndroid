@@ -3469,7 +3469,7 @@ function renderSettings(eb){
     </div>
     <div class="form-row">
       <label class="field-label">下载目录</label>
-      <input type="text" id="set_output_dir" value="${esc(s.output_dir||'')}" placeholder="应用私有目录">
+      <input type="text" id="set_output_dir" value="${esc(s.output_dir||'')}" placeholder="应用私有目录" onchange="saveOutputDir()">
       <div style="font-size:10.5px;color:var(--fg-dim);margin-top:5px;line-height:1.5">
         默认使用应用私有存储（无需权限，Android 11+ 可直接写入）<br>
         如需保存到公共目录(如 Movies/)，需授予「所有文件访问权限」
@@ -3570,9 +3570,6 @@ function renderSettings(eb){
         <input type="checkbox" ${(s.clearOnExit||'false')==='true'?'checked':''} onchange="saveSetting('clearOnExit',this.checked?'true':'false')">
         <span class="slider"></span>
       </label>
-    </div>
-    <div class="btn-row" style="margin-top:12px">
-      <button class="btn btn-primary" onclick="saveOutputDir()">保存目录</button>
     </div>
     <h2>缓存管理</h2>
     <div class="btn-row">
