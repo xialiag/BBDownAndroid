@@ -1,4 +1,4 @@
-/* ===== BBDown Android — 前端逻辑 v2.0.15 ===== */
+/* ===== BBDown Android — 前端逻辑 v2.0.17 ===== */
 /* 包含: 扫码登录、批量下载、多线程下载、任务管理、调试日志 */
 
 /* ---------- 原生桥接 Promise 封装 ---------- */
@@ -1219,11 +1219,11 @@ function renderAddTask(eb){
     <p class="lead">输入B站视频链接，支持批量(空格分割)</p>
     <div class="form-section">
       <div class="parse-box">
-        <input type="text" id="f_url" placeholder="BV链接 / EP链接 / 空格分割批量" value="${esc(state._lastUrl||'')}">
+        <input type="text" id="f_url" placeholder="视频/番剧/课程链接，或 BV/av/ep/ss/md 号" value="${esc(state._lastUrl||'')}">
         <button class="btn btn-primary" onclick="doParse()">解析</button>
       </div>
       <div style="font-size:11px;color:var(--fg-dim);margin-top:6px">
-        单个: <code>BV1aE5T65Ebt</code> · 批量: <code>BV1xxx BV2yyy BV3zzz</code>
+        单个: <code>BV1aE5T65Ebt</code> / <code>ep12345</code> · 批量: 空格分割多个链接
       </div>
     </div>
   </div>`;
@@ -1239,14 +1239,17 @@ async function doParse(){
   try{
     // 从已保存的设置加载默认下载参数（如 downloadMode），确保编辑器初始选中与设置一致
     applyDefaultSettings();
-    // 检测是否为批量(包含空格)
-    const urls = url.split(/\s+/).filter(s=>s.length>0);
+    // 分割输入并过滤非链接文本：支持直接粘贴B站App的分享文案（如「【标题】 https://b23.tv/xxx」）
+    const looksLikeTarget = (s)=> /^https?:\/\//i.test(s) || /^[Bb][Vv]1\w+$/.test(s)
+      || /^(av|ep|ss|md)\d+$/i.test(s) || /cheese\//i.test(s);
+    const urls = url.split(/\s+/).filter(s=>s.length>0).filter(looksLikeTarget);
+    if(!urls.length){ toast('未识别到有效链接或ID','err'); if(state.currentView === 'addtask') renderEditor(); return; }
     if(urls.length > 1){
       // 批量解析（流式增量回传，降低内存峰值，避免大列表闪退）
       state.batchResults = [];
       state._batchCollectionTitle = '';
       editorBody().innerHTML = `<div class="view"><h1>新建下载任务</h1><div class="loading-pulse">${spinIcon()} 正在批量解析 ${urls.length} 个链接… (<span id="batchProg">0</span>/${urls.length})</div></div>`;
-      await callBridgeProgress('parseBatch', url, (prog)=>{
+      await callBridgeProgress('parseBatch', urls.join(' '), (prog)=>{
         if(prog.items && prog.items.length){
           state.batchResults = state.batchResults.concat(prog.items);
         }
@@ -1258,7 +1261,9 @@ async function doParse(){
       return;
     }
     // 合并解析流程：parseUrl + getVideoInfo + getPlayInfo 一次性完成，仅渲染一次
-    const parsed = await callBridge('parseUrl', url);
+    // 用过滤后的链接（而非原始整串，可能含分享文案）作为下载URL，供流获取/元数据补全使用
+    state._lastUrl = urls[0];
+    const parsed = await callBridge('parseUrl', urls[0]);
     state.parsed = parsed;
     const info = await callBridge('getVideoInfo', parsed.type, parsed.aid, parsed.epId, parsed.bvid||'');
     state.videoInfo = info;
@@ -4080,11 +4085,10 @@ function renderHelp(eb){
   eb.innerHTML = `<div class="view">
     <h1>使用说明</h1>
     <h2>支持的链接</h2>
-    <p>· 完整链接: https://www.bilibili.com/video/BV1xxx</p>
-    <p>· 短链: https://b23.tv/xxx</p>
-    <p>· 番剧: https://www.bilibili.com/bangumi/play/epxxx</p>
-    <p>· 课程: https://www.bilibili.com/cheese/play/epxxx</p>
-    <p>· 纯ID: BV1xxx, av12345, ep12345, ss1234</p>
+    <p>· 视频: https://www.bilibili.com/video/BV1xxx 或 https://b23.tv/xxx 短链</p>
+    <p>· 番剧: https://www.bilibili.com/bangumi/play/epxxx(/ssxxx) 或 /bangumi/media/mdxxx</p>
+    <p>· 课程: https://www.bilibili.com/cheese/play/epxxx(/ssxxx)</p>
+    <p>· 纯ID: BV1xxx, av12345, ep12345, ss1234, md12345</p>
     <h2>下载模式</h2>
     <p>· 完整下载: 视频+音频合并+字幕+封面+弹幕</p>
     <p>· 仅视频: 视频+音频合并(不含字幕/弹幕等附加)</p>

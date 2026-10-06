@@ -524,6 +524,7 @@ object BilibiliApi {
             val bvMatch = Regex("[Bb][Vv]1(\\w+)").find(s)
             val epMatch = Regex("/ep(\\d+)").find(s)
             val ssMatch = Regex("/ss(\\d+)").find(s)
+            val mdMatch = Regex("/md(\\d+)").find(s)
             when {
                 s.contains("video/av", ignoreCase = true) && avMatch != null ->
                     return ParsedId("av", aid = avMatch.groupValues[1])
@@ -549,6 +550,9 @@ object BilibiliApi {
                     val epId = resolveSeasonToEp(ssMatch.groupValues[1])
                     return ParsedId("ep", epId = epId)
                 }
+                // 番剧介绍页 /bangumi/media/mdXXXX（pgc/review/user 取当前集）
+                mdMatch != null ->
+                    return ParsedId("ep", epId = resolveMediaMdToEp(mdMatch.groupValues[1]))
                 bvMatch != null ->
                     return ParsedId("av", aid = BvConverter.decode(bvMatch.groupValues[1]).toString(),
                         bvid = "BV1" + bvMatch.groupValues[1])
@@ -575,6 +579,10 @@ object BilibiliApi {
             }
             if (s.startsWith("ep", ignoreCase = true)) return ParsedId("ep", epId = s.substring(2))
             if (s.startsWith("ss", ignoreCase = true)) return ParsedId("ep", epId = resolveSeasonToEp(s.substring(2)))
+            if (s.startsWith("md", ignoreCase = true)) {
+                val mdId = Regex("\\d+").find(s)?.value ?: throw IllegalArgumentException("无法识别的输入")
+                return ParsedId("ep", epId = resolveMediaMdToEp(mdId))
+            }
             throw IllegalArgumentException("无法识别的输入")
         }
     }
@@ -585,6 +593,15 @@ object BilibiliApi {
         val episodes = result.optJSONArray("episodes") ?: throw IllegalStateException("番剧无剧集")
         if (episodes.length() == 0) throw IllegalStateException("番剧无剧集")
         return episodes.getJSONObject(0).getString("id")
+    }
+
+    /** 番剧 media(md) 介绍页 → 当前集 epId（pgc/review/user API，与原版 BBDown GetEpIdByMDAsync 一致） */
+    private fun resolveMediaMdToEp(mdId: String): String {
+        val json = JSONObject(Http.get("https://api.bilibili.com/pgc/review/user?media_id=$mdId"))
+        val result = json.optJSONObject("result") ?: throw IllegalStateException("获取番剧信息失败(code=${json.optInt("code")})")
+        val epId = result.optJSONObject("media")?.optJSONObject("new_ep")?.optString("id") ?: ""
+        if (epId.isEmpty() || epId == "null") throw IllegalStateException("番剧无剧集")
+        return epId
     }
 
     /** 课程: 通过 season_id 获取第一个 epId（pugv API，与番剧不互通） */
@@ -606,7 +623,9 @@ object BilibiliApi {
         var idx = 1
         for (i in 0 until arr.length()) {
             val ep = arr.getJSONObject(i)
-            val t = (ep.optString("title") + " " + ep.optString("long_title")).trim()
+            // long_title 为 JSON null 时 optString 返回字符串 "null"，需过滤
+            val longTitle = ep.optString("long_title").takeIf { it != "null" } ?: ""
+            val t = (ep.optString("title") + " " + longTitle).trim()
             pages.add(PageInfo(
                 index = idx++,
                 aid = ep.optString("aid"),
@@ -616,11 +635,16 @@ object BilibiliApi {
                 duration = ep.optInt("duration", 0)
             ))
         }
+        // 讲师信息与发布时间（对齐原版 BBDown CheeseInfoFetcher：up_info.uname/mid + release_date）
+        val upInfo = result.optJSONObject("up_info")
+        val firstEp = arr.optJSONObject(0)
         return VideoInfo(
             title = result.optString("title").trim(),
             desc = result.optString("subtitle").trim(),
             pic = normalizePic(result.optString("cover")),
-            pubTime = 0,
+            pubTime = firstEp?.optLong("release_date", 0) ?: 0,
+            upperName = upInfo?.optString("uname")?.trim() ?: "",
+            ownerMid = upInfo?.optString("mid")?.trim() ?: "",
             isBangumi = true,
             isCheese = true,
             pages = pages
@@ -643,7 +667,13 @@ object BilibiliApi {
         if (parsed.type == "cheese") {
             return getCheeseInfo(parsed.epId)
         }
-        return getBangumiInfo(parsed.epId)
+        return try {
+            getBangumiInfo(parsed.epId)
+        } catch (e: Exception) {
+            // 对齐原版 BBDown：番剧查不到该 ep 时按课程查找（课程/番剧的 ep 号不互通）
+            Logger.w("Api", "番剧查找失败，尝试按课程查找: ${e.message}")
+            getCheeseInfo(parsed.epId)
+        }
     }
 
     /** 通过 bvid 获取视频信息（更可靠，避免 BV decode 出错） */
@@ -738,7 +768,9 @@ object BilibiliApi {
         for (i in 0 until arr.length()) {
             val ep = arr.getJSONObject(i)
             if (ep.optString("badge") == "预告") continue
-            val t = (ep.optString("title") + " " + ep.optString("long_title")).trim()
+            // long_title 为 JSON null 时 optString 返回字符串 "null"，需过滤
+            val longTitle = ep.optString("long_title").takeIf { it != "null" } ?: ""
+            val t = (ep.optString("title") + " " + longTitle).trim()
             pages.add(PageInfo(
                 index = idx++,
                 aid = ep.optString("aid"),

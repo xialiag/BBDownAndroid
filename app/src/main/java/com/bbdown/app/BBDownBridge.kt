@@ -1120,7 +1120,8 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
             try {
                 val parsed = BilibiliApi.parseUrl(url)
                 val info = BilibiliApi.getVideoInfo(parsed)
-                val isBangumi = parsed.epId.isNotEmpty() && parsed.type != "cheese"
+                // 课程(cheese)与番剧(ep)的播放接口同为 pgc 系：getPlayInfoWeb 依赖 isBangumi=true 才会把 /pgc/ 替换为 /pugv/
+                val isBangumi = parsed.epId.isNotEmpty()
                 val isCheese = parsed.type == "cheese"
                 val firstPage = info.pages.firstOrNull() ?: PageInfo(index = 1, aid = parsed.aid, cid = "", epid = parsed.epId)
                 val play = BilibiliApi.getPlayInfo(firstPage.aid, firstPage.cid, firstPage.epid, isBangumi, isCheese = isCheese)
@@ -1188,7 +1189,8 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
             try {
                 val parsed = BilibiliApi.parseUrl(url)
                 val info = BilibiliApi.getVideoInfo(parsed)
-                val isBangumi = parsed.epId.isNotEmpty() && parsed.type != "cheese"
+                // 课程(cheese)与番剧(ep)的播放接口同为 pgc 系：getPlayInfoWeb 依赖 isBangumi=true 才会把 /pgc/ 替换为 /pugv/
+                val isBangumi = parsed.epId.isNotEmpty()
                 val isCheese = parsed.type == "cheese"
                 val firstPage = info.pages.firstOrNull()
                     ?: PageInfo(index = 1, aid = parsed.aid, cid = "", epid = parsed.epId)

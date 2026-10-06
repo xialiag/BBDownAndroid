@@ -177,10 +177,15 @@ class MainActivity : AppCompatActivity() {
 (function(){
   var _origAdd = AndroidBridge.addTask;
   function fmtSz(b){if(!b||b<=0)return'';if(b>=1048576)return'~'+(b/1048576).toFixed(2)+' MB';return'~'+(b/1024).toFixed(1)+' KB';}
-  function fetchStreams(url,cb){
-    var rid=++window._bseq;
-    window._bres[rid]={resolve:function(d){cb(d);},reject:function(e){toast('获取流失败:'+e,'err');}};
-    try{AndroidBridge.getAvailableStreams(rid,url);}catch(e){toast('获取流失败:'+e,'err');}
+  /* 经前端全局 callBridge 请求流列表。注意 app.js 的 _bres/_bseq 是顶层 let/const，
+     不会挂到 window 上（window._bres 恒 undefined），不能以 window.xxx 访问；
+     且流信息获取失败/超时绝不能吞掉下载请求——由 fail 回调回退原始 addTask。 */
+  function fetchStreams(url,cb,fail){
+    var done=false;
+    function ok(d){ if(done)return; done=true; clearTimeout(timer); cb(d); }
+    function bad(e){ if(done)return; done=true; clearTimeout(timer); if(fail)fail(e); }
+    var timer=setTimeout(function(){ bad('获取流信息超时'); },10000);
+    try{ callBridge('getAvailableStreams',url).then(ok,bad); }catch(e){ bad(e); }
   }
   function showOverlay(data,task){
     var vids=data.videos||[],auds=data.audios||[];
@@ -217,18 +222,24 @@ class MainActivity : AppCompatActivity() {
     ov.onclick=function(e){if(e.target===ov)ov.remove();};
   }
   AndroidBridge.addTask=function(reqId,tj){
-    try{var t=typeof tj==='string'?JSON.parse(tj):tj;}catch(e){return _origAdd.call(AndroidBridge,reqId,tj);}
-    var url=t.url||'';if(!url)return _origAdd.call(AndroidBridge,reqId,tj);
+    var t;
+    try{ t=typeof tj==='string'?JSON.parse(tj):tj; }catch(e){ return _origAdd.call(AndroidBridge,reqId,tj); }
+    var url=(t&&t.url)||'';if(!url)return _origAdd.call(AndroidBridge,reqId,tj);
     fetchStreams(url,function(d){
-      if(d.videos.length<=3){_origAdd.call(AndroidBridge,reqId,tj);return;}
+      var vids=(d&&d.videos)||[],auds=(d&&d.audios)||[];
+      // 流少或无流时无需选择，直接按默认设置下载
+      if(vids.length<=3){_origAdd.call(AndroidBridge,reqId,tj);return;}
       showOverlay(d,t);
       document.getElementById('sp-ok').onclick=function(){
-        var vids2=d.videos||[],auds2=d.audios||[];
-        if(vids2.length)t.videoId=window._csVal['sp_vs']||vids2[0].id;
-        if(auds2.length)t.preferAudio=window._csVal['sp_as']||auds2[0].id;
-        document.getElementById('sp-ov').remove();
+        if(vids.length)t.videoId=window._csVal['sp_vs']||vids[0].id;
+        if(auds.length)t.preferAudio=window._csVal['sp_as']||auds[0].id;
+        var ov=document.getElementById('sp-ov');if(ov)ov.remove();
         _origAdd.call(AndroidBridge,reqId,JSON.stringify(t));
       };
+    },function(e){
+      // 保底：获取流失败不阻断下载，回退到任务默认选流
+      toast('获取流信息失败，按默认设置下载：'+e,'warn');
+      _origAdd.call(AndroidBridge,reqId,tj);
     });
   };
 })();
