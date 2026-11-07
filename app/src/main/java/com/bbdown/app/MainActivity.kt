@@ -15,13 +15,19 @@ import android.os.Environment
 import android.os.PowerManager
 import android.provider.Settings
 import android.view.KeyEvent
-import android.webkit.WebChromeClient
-import android.webkit.WebSettings
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.Surface
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.Modifier
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.bbdown.app.ui.AppRoot
+import com.bbdown.app.ui.AppViewModel
+import com.bbdown.app.ui.theme.AppTheme
+import com.bbdown.app.ui.theme.BBDownTheme
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
@@ -32,7 +38,8 @@ import com.bbdown.app.core.Logger
 import java.io.File
 
 class MainActivity : AppCompatActivity() {
-    private lateinit var webView: WebView
+    /** Compose 侧的 ViewModel 引用（供返回键/主题切换回调使用） */
+    var appViewModel: AppViewModel? = null
     private var backPressedTime: Long = 0
     private var didCleanOnExit = false  // 防止 onStop + onDestroy 重复清理
 
@@ -41,9 +48,6 @@ class MainActivity : AppCompatActivity() {
         private const val REQ_MANAGE_STORAGE = 1002
         private const val REQ_NOTIFICATION = 1003
         private const val BACK_PRESS_INTERVAL = 2000L
-
-        // 流选择器已移至 BBDownBridge.showStreamPickerDialog（原生对话框）
-        // 流选择器已移至 BBDownBridge.showStreamPickerDialog（原生对话框）
     }
 
     /** 请求电池优化白名单（仅首次）：防止国产 ROM 在后台杀死下载服务 */
@@ -111,8 +115,9 @@ class MainActivity : AppCompatActivity() {
         // 请求通知权限(Android 13+):前台服务通知需运行时授权，否则用户看不到下载进度
         requestNotificationPermission()
 
-        // 初始化默认输出目录（应用私有存储，无需权限）
-        TaskManager.outputDir = File(getExternalFilesDir(Environment.DIRECTORY_MOVIES), "BBDown").apply { mkdirs() }
+        // 初始化输出目录：优先用用户设置为公共存储（有权限时），否则退回应用私有目录。
+        // 注意：必须在 TaskManager.init 之后、任务恢复之前设置，否则会覆盖用户设置。
+        TaskManager.outputDir = resolveOutputDir()
 
         // 初始化任务持久化并恢复上次未完成的任务
         TaskStore.init(this)
@@ -145,157 +150,20 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        webView = WebView(this)
-        // WebView 背景色根据用户主题动态匹配，避免 HTML 加载前的白色闪烁，
-        // 同时保证深色/浅色/跟随系统三种主题下背景与 CSS --bg 一致。
-        applyWebTheme(getSharedPreferences("bbdown_settings", Context.MODE_PRIVATE)
-            .getString("theme", "dark") ?: "dark")
-        setContentView(webView)
-
-        webView.settings.apply {
-            javaScriptEnabled = true
-            domStorageEnabled = true
-            databaseEnabled = true
-            allowFileAccess = false
-            allowContentAccess = false
-            // 使用默认缓存模式：app.js/app.css 的 URL 含版本号，版本不变时正常缓存加速启动。
-            cacheMode = WebSettings.LOAD_DEFAULT
-            mediaPlaybackRequiresUserGesture = false
-            mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            setSupportZoom(false)
-            useWideViewPort = true
-            loadWithOverviewMode = true
-            domStorageEnabled = true
-        }
-        webView.webViewClient = object : WebViewClient() {
-            /**
-             * 导航守卫：WebView 只允许停留在本地 assets 主文档。
-             * 任何其他导航（远程页面、data:/javascript: 等）都会把 AndroidBridge 暴露给不可信内容，
-             * 因此一律外跳系统浏览器并拦截（loadUrl 不会触发 shouldOverrideUrlLoading）。
-             */
-            override fun shouldOverrideUrlLoading(view: android.webkit.WebView?, request: android.webkit.WebResourceRequest?): Boolean {
-                val url = request?.url?.toString() ?: return true
-                if (url.startsWith("file:///android_asset/")) return false
-                try {
-                    startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                } catch (_: Exception) {}
-                return true
+        // ==================== Jetpack Compose 内容 ====================
+        // 原 WebView + 注入脚本 + assets 三件套已整体替换为 Compose。
+        // 业务内核（DownloadEngine/BilibiliApi/FFmpegMuxer/TaskManager）完全不变。
+        setContent {
+            val vm: AppViewModel = viewModel()
+            LaunchedEffect(Unit) {
+                appViewModel = vm
+                vm.attach(applicationContext)
             }
-
-            @Suppress("OverridingDeprecatedMember")
-            override fun shouldOverrideUrlLoading(view: android.webkit.WebView?, url: String?): Boolean {
-                val u = url ?: return true
-                if (u.startsWith("file:///android_asset/")) return false
-                try {
-                    startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(u)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                } catch (_: Exception) {}
-                return true
-            }
-
-            override fun shouldInterceptRequest(view: android.webkit.WebView?, request: android.webkit.WebResourceRequest?): android.webkit.WebResourceResponse? {
-                val url = request?.url?.toString() ?: return null
-                if (url.contains("index.html") && url.startsWith("file://")) {
-                    try {
-                        val original = assets.open("index.html").bufferedReader().use { it.readText() }
-                        val inject = """<script>
-(function(){
-  var _origAdd = AndroidBridge.addTask;
-  /* HTML 转义：视频标题来自 B站接口（可含 <img onerror=...>），直接拼进 innerHTML 就是 XSS，
-     而本脚本运行在挂了 AndroidBridge 的主 world，XSS 可直接读登录态/写文件。 */
-  function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];});}
-  function fmtSz(b){if(!b||b<=0)return'';if(b>=1048576)return'~'+(b/1048576).toFixed(2)+' MB';return'~'+(b/1024).toFixed(1)+' KB';}
-  /* 经前端全局 callBridge 请求流列表。注意 app.js 的 _bres/_bseq 是顶层 let/const，
-     不会挂到 window 上（window._bres 恒 undefined），不能以 window.xxx 访问；
-     且流信息获取失败/超时绝不能吞掉下载请求——由 fail 回调回退原始 addTask。 */
-  function fetchStreams(url,cb,fail){
-    var done=false;
-    function ok(d){ if(done)return; done=true; clearTimeout(timer); cb(d); }
-    function bad(e){ if(done)return; done=true; clearTimeout(timer); if(fail)fail(e); }
-    var timer=setTimeout(function(){ bad('获取流信息超时'); },10000);
-    try{ callBridge('getAvailableStreams',url).then(ok,bad); }catch(e){ bad(e); }
-  }
-  function showOverlay(data,task,settle){
-    var vids=data.videos||[],auds=data.audios||[];
-    if(!vids.length&&!auds.length){toast('无可用流','err');return;}
-    var old=document.getElementById('sp-ov');if(old)old.remove();
-    var ov=document.createElement('div');ov.id='sp-ov';
-    ov.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px 0';
-    var cd=document.createElement('div');
-    cd.style.cssText='background:var(--bg,#1a1a2e);border:1px solid var(--border,#333);border-radius:12px;padding:20px;max-width:420px;width:90%;max-height:85vh;overflow-y:auto;color:var(--fg,#e0e0e0)';
-    var h='<div style="font-size:16px;font-weight:bold;margin-bottom:16px;text-align:center">'+esc(data.title||'选择流')+'</div>';
-    if(vids.length){
-      h+='<div style="font-size:12px;color:var(--fg-dim,#888);margin-bottom:6px">视频流 ('+vids.length+')</div>';
-      h+='<div id="sp-vw"></div>';
-    }
-    if(auds.length){
-      h+='<div style="font-size:12px;color:var(--fg-dim,#888);margin:12px 0 6px">音频流 ('+auds.length+')</div>';
-      h+='<div id="sp-aw"></div>';
-    }
-    h+='<div style="display:flex;gap:8px;margin-top:16px">';
-    h+='<button id="sp-ok" class="btn btn-primary" style="flex:1">开始下载</button>';
-    h+='<button id="sp-no" class="btn" style="flex:1">取消</button></div>';
-    cd.innerHTML=h;ov.appendChild(cd);document.body.appendChild(ov);
-    function mkLabel(v){
-      var p=[v.dfn||''];if(v.res)p.push(v.res);p.push(v.codecs||'');if(v.fps)p.push(v.fps+'fps');p.push(v.bandwidth+'kbps');
-      var sz=v.size?v.size*(data.dur||0)/8:0;if(!sz&&v.bandwidth&&data.dur)sz=v.bandwidth*1000*data.dur/8;if(sz>0)p.push(fmtSz(sz));
-      return p.join(' | ');
-    }
-    var vOpts=vids.map(function(v){return[v.id,mkLabel(v)];});
-    var aOpts=auds.map(function(a){var p=[a.codecs||'',a.bandwidth+'kbps'];var sz=a.bandwidth&&data.dur?a.bandwidth*1000*data.dur/8:0;if(sz>0)p.push(fmtSz(sz));return[a.id,p.join(' | ')];});
-    var vid='sp_vs',aid='sp_as';
-    if(vids.length&&typeof window.csHTML==='function'){document.getElementById('sp-vw').innerHTML=window.csHTML(vid,vOpts,vOpts[0][0]);window._csOpts[vid]=vOpts;window._csVal[vid]=vOpts[0][0];}
-    if(auds.length&&typeof window.csHTML==='function'){document.getElementById('sp-aw').innerHTML=window.csHTML(aid,aOpts,aOpts[0][0]);window._csOpts[aid]=aOpts;window._csVal[aid]=aOpts[0][0];}
-    /* 取消/点遮罩：必须 settle 原始 addTask 的 Promise，否则前端 callBridge 永远 pending（界面卡在"添加中"） */
-    function settleCancel(){ ov.remove(); if(settle)settle(); }
-    document.getElementById('sp-no').onclick=settleCancel;
-    ov.onclick=function(e){if(e.target===ov)settleCancel();};
-  }
-  AndroidBridge.addTask=function(reqId,tj){
-    var t;
-    try{ t=typeof tj==='string'?JSON.parse(tj):tj; }catch(e){ return _origAdd.call(AndroidBridge,reqId,tj); }
-    var url=(t&&t.url)||'';if(!url)return _origAdd.call(AndroidBridge,reqId,tj);
-    fetchStreams(url,function(d){
-      var vids=(d&&d.videos)||[],auds=(d&&d.audios)||[];
-      // 流少或无流时无需选择，直接按默认设置下载
-      if(vids.length<=3){_origAdd.call(AndroidBridge,reqId,tj);return;}
-      showOverlay(d,t,function(){ _origAdd.call(AndroidBridge,reqId,tj); });
-      document.getElementById('sp-ok').onclick=function(){
-        if(vids.length)t.videoId=window._csVal['sp_vs']||vids[0].id;
-        if(auds.length)t.preferAudio=window._csVal['sp_as']||auds[0].id;
-        var ov=document.getElementById('sp-ov');if(ov)ov.remove();
-        _origAdd.call(AndroidBridge,reqId,JSON.stringify(t));
-      };
-    },function(e){
-      // 保底：获取流失败不阻断下载，回退到任务默认选流
-      toast('获取流信息失败，按默认设置下载：'+e,'warn');
-      _origAdd.call(AndroidBridge,reqId,tj);
-    });
-  };
-})();
-</script>"""
-                        val modified = original.replace(
-                            "<script src=\"app.js",
-                            "$inject\n<script src=\"app.js"
-                        )
-                        val input = java.io.ByteArrayInputStream(modified.toByteArray(Charsets.UTF_8))
-                        return android.webkit.WebResourceResponse("text/html", "UTF-8", input)
-                    } catch (e: Exception) { }
+            BBDownTheme(darkTheme = vm.darkTheme) {
+                Surface(Modifier.fillMaxSize(), color = AppTheme.colors.bg) {
+                    AppRoot(vm, onRequestAllFilesAccess = { openAllFilesAccessSettings() })
                 }
-                return null
             }
-            override fun onPageFinished(view: android.webkit.WebView?, url: String?) {
-                super.onPageFinished(view, url)
-            }
-        }
-        webView.webChromeClient = WebChromeClient()
-        webView.addJavascriptInterface(BBDownBridge(this, webView), "AndroidBridge")
-
-        if (savedInstanceState == null) {
-            // 直接加载 index.html。app.js/app.css 的 URL 中包含版本号（如 ?v=1.9.5），
-            // 版本不变时 WebView 正常缓存（启动快），版本变化时 URL 变化自动加载新代码。
-            webView.loadUrl("file:///android_asset/index.html")
-        } else {
-            webView.restoreState(savedInstanceState)
         }
 
         // 请求存储权限
@@ -304,14 +172,10 @@ class MainActivity : AppCompatActivity() {
         // 注册内存压力回调，记录低内存事件便于排查闪退
         registerMemoryCallbacks()
 
-        // 启动后静默检查 GitHub 更新（开关默认开；有新版本才弹窗提示）
-        webView.postDelayed({
-            try {
-                if (getSharedPreferences("bbdown_settings", Context.MODE_PRIVATE).getString("check_update", "true") == "true") {
-                    webView.evaluateJavascript("try{window.__onCheckUpdate&&window.__onCheckUpdate();}catch(e){}", null)
-                }
-            } catch (_: Exception) {}
-        }, 6000)
+        // 启动后静默检查 GitHub 更新（开关默认开）
+        if (getSharedPreferences("bbdown_settings", Context.MODE_PRIVATE).getString("check_update", "true") == "true") {
+            checkUpdateSilently()
+        }
 
         // 记录 FFmpeg 版本信息（编译时选择 + 运行时实际版本）
         FFmpegVersion.logVersionInfo()
@@ -320,20 +184,15 @@ class MainActivity : AppCompatActivity() {
         // 已在根页面时提示"再按一次退出应用"，2秒内再按才真正退出
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                webView.evaluateJavascript(
-                    "(function(){try{return handleBackButton();}catch(e){return false;}})()"
-                ) { result ->
-                    val handled = result?.trim()?.equals("true", ignoreCase = true) == true
-                    if (!handled) {
-                        // 已在根页面：2秒内再按一次退出
-                        if (System.currentTimeMillis() - backPressedTime < BACK_PRESS_INTERVAL) {
-                            // 退出前直接清理已完成任务，不依赖 onStop/isFinishing 生命周期标志
-                            doCleanupOnExit()
-                            finish()
-                        } else {
-                            backPressedTime = System.currentTimeMillis()
-                            Toast.makeText(this@MainActivity, "再按一次退出应用", Toast.LENGTH_SHORT).show()
-                        }
+                val handled = appViewModel?.handleBack() == true
+                if (!handled) {
+                    // 已在根页面：2秒内再按一次退出
+                    if (System.currentTimeMillis() - backPressedTime < BACK_PRESS_INTERVAL) {
+                        doCleanupOnExit()
+                        finish()
+                    } else {
+                        backPressedTime = System.currentTimeMillis()
+                        Toast.makeText(this@MainActivity, "再按一次退出应用", Toast.LENGTH_SHORT).show()
                     }
                 }
             }
@@ -342,15 +201,89 @@ class MainActivity : AppCompatActivity() {
 
     /** 根据用户主题动态设置 WebView 背景色（与 assets/app.css 的 --bg 保持一致）。
      *  theme: "dark" / "light" / "system"（system 时跟随系统暗色模式）。
-     *  由 onCreate 初始调用，并由 BBDownBridge.updateNativeTheme 在用户切换主题时回调。 */
+     *  由 onCreate 初始调用。Compose 版的主题切换由 ViewModel 直接驱动，不再依赖原 WebView 桥回调。 */
+    /**
+     * 解析输出目录：沿用用户设置里的公共路径（已授予"所有文件访问"时），
+     * 否则退回应用私有目录，保证任何时候都可写。
+     */
+    private fun resolveOutputDir(): File {
+        val privateDir = File(getExternalFilesDir(Environment.DIRECTORY_MOVIES), "BBDown")
+        val configured = getSharedPreferences("bbdown_settings", Context.MODE_PRIVATE)
+            .getString("output_dir", null)
+        if (configured.isNullOrBlank()) return privateDir.apply { mkdirs() }
+        // 直接用"能否实际写入"判定，比 Environment.isExternalStorageManager() 可靠：
+        // 该 ROM 上 appops 已 allow 但 permission flag 仍是 granted=false，isExternalStorageManager() 会误判为无权限。
+        val dir = File(configured)
+        val writable = try {
+            if (dir.mkdirs() || dir.isDirectory) {
+                val probe = File(dir, ".bbdown_write_test")
+                val ok = probe.createNewFile() || probe.exists()
+                probe.delete()
+                ok
+            } else false
+        } catch (_: Exception) { false }
+        if (writable) {
+            Logger.i("MainActivity", "输出目录: $configured（公共存储可写）")
+            return dir
+        }
+        Logger.w("MainActivity", "输出目录不可写，退回私有目录: $configured -> $privateDir")
+        return privateDir.apply { mkdirs() }
+    }
+
+    /** 跳转系统「所有文件访问」授权页（公共存储写入所需） */
+    fun openAllFilesAccessSettings() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+        try {
+            startActivity(
+                Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+                    .setData(android.net.Uri.parse("package:$packageName"))
+            )
+        } catch (e: Exception) {
+            try {
+                startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+            } catch (_: Exception) {
+                Toast.makeText(this, "无法打开授权页，请手动到系统设置授权", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    /** 静默检查 GitHub 更新：有新版本时通过 ViewModel 的 toast 提示（不打断使用） */
+    private fun checkUpdateSilently() {
+        Thread {
+            try {
+                val body = com.bbdown.app.core.Http.get("https://api.github.com/repos/xialiag/BBDownAndroid/releases/latest")
+                val tag = org.json.JSONObject(body).optString("tag_name", "").removePrefix("v")
+                val current = packageManager.getPackageInfo(packageName, 0).versionName ?: "0"
+                if (tag.isNotEmpty() && versionCompare(tag, current) > 0) {
+                    runOnUiThread { appViewModel?.toast("发现新版本 v$tag（当前 v$current）") }
+                }
+                Logger.i("Update", "检查更新: latest=$tag current=$current")
+            } catch (e: Exception) {
+                Logger.w("Update", "检查更新失败: ${e.message}")
+            }
+        }.apply { isDaemon = true }.start()
+    }
+
+    /** 语义化版本比较：a>b 返回正数 */
+    private fun versionCompare(a: String, b: String): Int {
+        val pa = a.split(".").mapNotNull { it.toIntOrNull() }
+        val pb = b.split(".").mapNotNull { it.toIntOrNull() }
+        for (i in 0 until maxOf(pa.size, pb.size)) {
+            val x = pa.getOrElse(i) { 0 }
+            val y = pb.getOrElse(i) { 0 }
+            if (x != y) return x - y
+        }
+        return 0
+    }
+
     fun applyWebTheme(theme: String) {
         val resolved = if (theme == "system") {
             val nightMode = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
             if (nightMode == Configuration.UI_MODE_NIGHT_YES) "dark" else "light"
         } else theme
-        // 与 app.css 中 --bg 取值严格一致：深色 #1a1a1e，浅色 #f5f5f7
+        // 窗口底色与 Compose 主题 --bg 一致：深色 #1a1a1e，浅色 #f5f5f7
         val color = if (resolved == "light") "#f5f5f7" else "#1a1a1e"
-        webView.setBackgroundColor(Color.parseColor(color))
+        window.decorView.setBackgroundColor(Color.parseColor(color))
     }
 
     /** 注册内存压力监听，在系统内存不足时主动释放资源 */
@@ -385,18 +318,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 主动释放内存：清理 WebView 缓存、图片缓存，触发 GC */
+    /** 主动释放内存：保存任务状态并触发 GC（Compose 侧图片缓存由 Coil 自行管理） */
     private fun releaseMemory() {
         try {
-            // 清理 WebView 缓存
-            if (::webView.isInitialized) {
-                webView.clearCache(true)
-            }
-            // 通知 JS 层清除图片缓存（blob URL 会被回收）
-            if (::webView.isInitialized) {
-                webView.evaluateJavascript("try{clearImgCache();}catch(e){}", null)
-            }
-            // 建议 JVM 回收内存
             System.gc()
         } catch (e: Exception) {
             Logger.w("Memory", "释放内存时异常: ${e.message}")
@@ -428,11 +352,6 @@ class MainActivity : AppCompatActivity() {
                 android.util.Log.w("MainActivity", "存储权限被拒绝，将使用应用私有目录")
             }
         }
-    }
-
-    override fun onSaveInstanceState(outState: Bundle) {
-        super.onSaveInstanceState(outState)
-        webView.saveState(outState)
     }
 
     override fun onPause() {

@@ -37,6 +37,7 @@
     </queries>
 
     <application
+        android:name=".ui.BBDownApp"
         android:allowBackup="true"
         android:fullBackupContent="@xml/backup_rules"
         android:dataExtractionRules="@xml/data_extraction_rules"

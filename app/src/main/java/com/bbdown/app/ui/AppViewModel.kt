@@ -1,0 +1,619 @@
+package com.bbdown.app.ui
+
+import android.content.Context
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.bbdown.app.core.AudioTrack
+import com.bbdown.app.core.BilibiliApi
+import com.bbdown.app.core.DownloadTask
+import com.bbdown.app.core.PageInfo
+import com.bbdown.app.core.PlayInfo
+import com.bbdown.app.core.VideoInfo
+import com.bbdown.app.core.VideoTrack
+import com.bbdown.app.TaskManager
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/** 六个主视图，与 WebView 版 currentView 一一对应 */
+enum class View { Explorer, AddTask, Search, Account, Settings, Help }
+
+/** UP 主条目（搜索结果 / 关注列表共用） */
+data class UpperItem(
+    val mid: String = "",
+    val uname: String = "",
+    val face: String = "",
+    val sign: String = "",
+    val fans: Int = 0,
+    val videoCount: Int = 0,
+    val officialType: Int = -1,
+    val officialDesc: String = "",
+    val vipType: Int = 0,
+    val vipStatus: Int = 0,
+    val special: Int = 0,
+)
+
+/** 视频卡片条目（投稿列表 / 收藏夹 / 搜索结果共用） */
+data class VideoItem(
+    val bvid: String = "",
+    val title: String = "",
+    val pic: String = "",
+    val ownerName: String = "",
+    val ownerFace: String = "",
+    val ownerMid: String = "",
+    val duration: String = "",
+    val play: Int = 0,
+    val danmaku: Int = 0,
+    val pubdate: Long = 0,
+    val created: Long = 0,
+    val favTime: Long = 0,
+    val desc: String = "",
+)
+
+/** 收藏夹 */
+data class FavFolderItem(val id: String = "", val title: String = "", val mediaCount: Int = 0, val cover: String = "")
+
+/**
+ * 分页列表的通用状态：成功/加载中/失败（含回滚基准）三态。
+ * 与 WebView 版同一契约：请求失败保留上一页数据，只有首页失败才显示错误态。
+ */
+data class PagedState<T>(
+    val items: List<T> = emptyList(),
+    val total: Int = 0,
+    val page: Int = 1,
+    val loading: Boolean = false,
+    val error: String? = null,
+) {
+    val totalPages: Int get() = if (total <= 0) 1 else ((total + pageSize - 1) / pageSize).coerceAtLeast(1)
+    val hasMore: Boolean get() = items.size < total
+    companion object { const val pageSize = 30 }
+}
+
+/**
+ * 全局 UI 状态容器。所有耗时操作走 viewModelScope + IO 线程，
+ * 结果回 Main 线程写入 Compose State，供 Composable 直接观察。
+ *
+ * 设计要点（沿用 WebView 版已验证的语义）：
+ * - 分页失败回滚页码与列表，避免"页码已跳但数据没到"的永久空洞
+ * - 请求令牌：连点时只让最后一次响应落地
+ * - 非业务异常一律以错误态呈现，绝不伪装成"空结果"
+ */
+class AppViewModel : ViewModel() {
+
+    // ==================== 全局 ====================
+    var currentView by mutableStateOf(View.Explorer)
+        private set
+    var darkTheme by mutableStateOf(true)
+        private set
+    var statusMessage by mutableStateOf<String?>(null)   // snackbar 文案
+    var statusIsError by mutableStateOf(false)
+
+    /** 任务快照：轮询 TaskManager，供列表/详情观察 */
+    var tasks by mutableStateOf<List<DownloadTask>>(emptyList())
+        private set
+    var selectedTaskId by mutableStateOf<String?>(null)
+    var manageMode by mutableStateOf(false)
+
+    /** 登录态 */
+    var webLogin by mutableStateOf(false)
+        private set
+    var tvLogin by mutableStateOf(false)
+        private set
+    var userName by mutableStateOf("")
+        private set
+    var userId by mutableStateOf("")
+        private set
+    var userFace by mutableStateOf("")
+        private set
+
+    // ==================== 设置 ====================
+    val settings = mutableStateMapOf<String, String>()
+
+    // ==================== 新建下载 ====================
+    var addTaskInput by mutableStateOf("")
+    var parsedUrl by mutableStateOf<String?>(null)
+    var videoInfo by mutableStateOf<VideoInfo?>(null)
+    var playInfo by mutableStateOf<PlayInfo?>(null)
+    var selectedPages = mutableStateListOf<Int>()
+    var selectedVideoId by mutableStateOf("")
+    var selectedAudioId by mutableStateOf("")
+    var addTaskLoading by mutableStateOf(false)
+    var addTaskError by mutableStateOf<String?>(null)
+
+    /** 批量解析结果 */
+    var batchLoading by mutableStateOf(false)
+    var batchProgress by mutableStateOf(0)
+    var batchResults by mutableStateOf<List<VideoItem>>(emptyList())
+    var batchErrors by mutableStateOf<List<String>>(emptyList())
+
+    // ==================== 搜索 ====================
+    var searchMode by mutableStateOf(0)   // 0=UP主 1=视频
+    var searchKeyword by mutableStateOf("")
+    var searchLoading by mutableStateOf(false)
+    var searchError by mutableStateOf<String?>(null)
+    var upperResults by mutableStateOf<List<UpperItem>>(emptyList())
+    var videoResults by mutableStateOf<List<VideoItem>>(emptyList())
+
+    /** 当前浏览的 UP 主投稿列表（搜索结果点进去） */
+    var currentUpper by mutableStateOf<UpperItem?>(null)
+    var upperVideos: PagedState<VideoItem> by mutableStateOf(PagedState())
+        private set
+    private var upperReqSeq = 0
+
+    // ==================== 账号 ====================
+    var followings: PagedState<UpperItem> by mutableStateOf(PagedState())
+        private set
+    private var followReqSeq = 0
+    var followTags by mutableStateOf<List<Pair<Int, String>>>(emptyList())
+    var currentFollowTag by mutableStateOf(0)
+    var followOrder by mutableStateOf("attention")
+
+    var favFolders by mutableStateOf<List<FavFolderItem>>(emptyList())
+        private set
+    var favFoldersLoading by mutableStateOf(false)
+    var favFoldersError by mutableStateOf<String?>(null)
+    var currentFavFolder by mutableStateOf<FavFolderItem?>(null)
+    var favList: PagedState<VideoItem> by mutableStateOf(PagedState())
+        private set
+    private var favReqSeq = 0
+
+    // ==================== 调试/诊断 ====================
+    var debugLogs by mutableStateOf("")
+    var crashLogs by mutableStateOf<List<Triple<String, Long, Long>>>(emptyList())
+
+    private var pollJob: Job? = null
+
+    fun attach(context: Context) {
+        refreshLogin()
+        loadAllSettings()
+        startPolling()
+    }
+
+    // ==================== 导航 ====================
+
+    fun navigate(view: View) {
+        if (currentView == view) return
+        currentView = view
+        // 离开搜索页时清掉 UP 投放态，避免下次进搜索还停在旧的投稿列表
+        if (view != View.Search) currentUpper = null
+    }
+
+    /**
+     * 返回键：按层级逐级退（详情→列表、UP投稿→搜索、收藏夹→账号、非根视图→任务列表）。
+     * 返回 true 表示已消费，false 表示已在根页面（由 Activity 处理"再按一次退出"）。
+     */
+    fun handleBack(): Boolean {
+        selectedTaskId?.let { selectedTaskId = null; return true }
+        if (manageMode) { manageMode = false; return true }
+        if (currentFavFolder != null) { backFromFavFolder(); return true }
+        if (currentUpper != null) { backFromUpper(); return true }
+        if (currentView != View.Explorer) { navigate(View.Explorer); return true }
+        return false
+    }
+
+    fun toast(msg: String, isError: Boolean = false) {
+        statusMessage = msg
+        statusIsError = isError
+    }
+
+    fun consumeToast() { statusMessage = null }
+
+    // ==================== 任务轮询 ====================
+
+    /** 200ms 轮询任务列表：进度条要跟手，且 TaskManager.all 只是内存读，成本低 */
+    private fun startPolling() {
+        pollJob?.cancel()
+        pollJob = viewModelScope.launch {
+            while (isActive) {
+                tasks = TaskManager.all
+                delay(300)
+            }
+        }
+    }
+
+    fun toggleTheme() {
+        darkTheme = !darkTheme
+        saveSetting("theme", if (darkTheme) "dark" else "light")
+    }
+
+    // ==================== 设置 ====================
+
+    private fun loadAllSettings() = viewModelScope.launch(Dispatchers.IO) {
+        // 设置项由 Bridge 的 getAllSettings 组装，这里直接复用它保证键集合一致
+        val json = bridgeGetAllSettings()
+        if (json != null) {
+            for (k in json.keys()) settings[k] = json.optString(k, "")
+            darkTheme = settings["theme"] != "light"
+        }
+    }
+
+    /** 请求公共存储写入权（跳系统授权页），返回后由 Activity 重建时重新判定 */
+    var needsStorageGrant by mutableStateOf(false)
+
+    fun requestStorageAccess() {
+        needsStorageGrant = true
+    }
+
+    fun consumeStorageRequest() { needsStorageGrant = false }
+
+    fun saveSetting(key: String, value: String) {
+        settings[key] = value
+        if (key == "theme") darkTheme = value != "light"
+        viewModelScope.launch(Dispatchers.IO) { bridgeSetSetting(key, value) }
+    }
+
+    // ==================== 登录 ====================
+
+    fun refreshLogin() = viewModelScope.launch {
+        val info = withContext(Dispatchers.IO) { bridgeCheckLogin() } ?: return@launch
+        webLogin = info.webLogin
+        tvLogin = info.tvLogin
+        userName = info.uname
+        userId = info.mid
+        userFace = info.face
+    }
+
+    fun logout(all: Boolean = true) = viewModelScope.launch {
+        withContext(Dispatchers.IO) { bridgeLogout(all) }
+        refreshLogin()
+        toast("已退出登录")
+    }
+
+    // ==================== 新建下载 ====================
+
+    fun updateAddTaskInput(v: String) { addTaskInput = v }
+
+    fun clearAddTaskState() {
+        parsedUrl = null; videoInfo = null; playInfo = null
+        selectedPages.clear(); selectedVideoId = ""; selectedAudioId = ""
+        addTaskError = null; batchResults = emptyList(); batchErrors = emptyList()
+    }
+
+    /** 解析输入：单条走 parseUrl+getVideoInfo+getPlayInfo，多条走批量解析 */
+    fun parseAndLoad(raw: String) = viewModelScope.launch {
+        val input = raw.trim()
+        if (input.isEmpty()) { toast("请输入视频链接或 BV 号", true); return@launch }
+        val parts = input.split(Regex("\\s+")).filter { it.isNotBlank() }
+        if (parts.size > 1) { parseBatch(parts); return@launch }
+
+        addTaskLoading = true
+        addTaskError = null
+        videoInfo = null; playInfo = null; parsedUrl = null
+        try {
+            val result = withContext(Dispatchers.IO) { bridgeResolveVideo(parts[0]) }
+            if (result == null) {
+                addTaskError = "解析失败：无法识别该链接"
+                toast("解析失败", true)
+            } else {
+                parsedUrl = result.url
+                videoInfo = result.info
+                selectedPages.clear()
+                selectedPages.addAll(result.info.pages.map { it.index })
+                playInfo = null
+                // 流信息是次要信息，失败不阻断下载（与 WebView 版一致）
+                playInfo = runCatching { withContext(Dispatchers.IO) { bridgeGetPlayInfo(result) } }.getOrNull()
+                selectedVideoId = playInfo?.videos?.firstOrNull { it.codecs.contains("avc") }?.id
+                    ?: playInfo?.videos?.firstOrNull()?.id ?: ""
+                selectedAudioId = playInfo?.audios?.firstOrNull()?.id ?: ""
+            }
+        } catch (e: Exception) {
+            addTaskError = e.message ?: e.javaClass.simpleName
+            toast(addTaskError!!, true)
+        } finally {
+            addTaskLoading = false
+        }
+    }
+
+    private suspend fun parseBatch(parts: List<String>) {
+        batchLoading = true
+        batchProgress = 0
+        batchResults = emptyList(); batchErrors = emptyList()
+        try {
+            val (ok, bad) = withContext(Dispatchers.IO) {
+                val okList = mutableListOf<VideoItem>()
+                val errList = mutableListOf<String>()
+                // 并发 4 路解析，避免一口气几十个请求被风控
+                parts.chunked(4).forEach { chunk ->
+                    coroutineScope {
+                        chunk.map { url ->
+                            async {
+                                runCatching { bridgeResolveVideo(url) }.getOrNull()
+                                    ?.let { it.url to it.info }
+                            }
+                        }.awaitAll().forEach { pair ->
+                            if (pair == null) errList.add("解析失败")
+                            else {
+                                okList.add(VideoItem(
+                                    bvid = pair.second.bvid.ifEmpty { pair.first },
+                                    title = pair.second.title,
+                                    pic = pair.second.pic,
+                                    ownerName = pair.second.upperName,
+                                    ownerMid = pair.second.ownerMid,
+                                    duration = "",
+                                    pubdate = pair.second.pubTime,
+                                ))
+                            }
+                        }
+                    }
+                    batchProgress = (okList.size + errList.size)
+                }
+                okList to errList
+            }
+            batchResults = ok
+            batchErrors = bad
+            toast("批量解析完成：成功 ${ok.size} 个${if (bad.isNotEmpty()) "，失败 ${bad.size} 个" else ""}")
+        } catch (e: Exception) {
+            toast("批量解析失败：${e.message}", true)
+        } finally {
+            batchLoading = false
+        }
+    }
+
+    /** 从搜索结果/投稿列表点视频卡片：切到新建下载页并直接解析该 BV 号 */
+    fun navigateToAddTaskWith(bvid: String) {
+        clearAddTaskState()
+        addTaskInput = bvid
+        navigate(View.AddTask)
+        parseAndLoad(bvid)
+    }
+
+    fun togglePage(index: Int) {
+        if (selectedPages.contains(index)) selectedPages.remove(index) else selectedPages.add(index)
+    }
+
+    fun selectAllPages(all: Boolean, pages: List<Int>) {
+        selectedPages.clear()
+        if (all) selectedPages.addAll(pages)
+    }
+
+    fun selectVideo(id: String) { selectedVideoId = id }
+    fun selectAudio(id: String) { selectedAudioId = id }
+
+    /** 提交下载任务 */
+    fun submitDownload() = viewModelScope.launch {
+        val info = videoInfo ?: run { toast("请先解析视频", true); return@launch }
+        val url = parsedUrl ?: info.bvid
+        val pages = info.pages.filter { selectedPages.contains(it.index) }
+        if (pages.isEmpty()) { toast("请至少选择一个分P", true); return@launch }
+        try {
+            withContext(Dispatchers.IO) {
+                val task = DownloadTask(
+                    taskId = System.currentTimeMillis().toString(),
+                    url = url,
+                    title = info.title,
+                    pic = info.pic,
+                    pages = pages,
+                    videoId = selectedVideoId,
+                    preferCodec = settings["preferCodec"] ?: "avc",
+                    preferAudio = selectedAudioId.ifEmpty { settings["preferAudio"] ?: "m4a" },
+                    cookie = bridgeCookie(),
+                    downloadMode = settings["downloadMode"] ?: "all",
+                    downloadDanmaku = settings["downloadDanmaku"] == "true",
+                    skipMux = settings["skipMux"] == "true",
+                    skipSubtitle = settings["skipSubtitle"] == "true",
+                    skipCover = settings["skipCover"] == "true",
+                    skipAi = settings["skipAi"] != "false",
+                    videoAscending = settings["videoAscending"] == "true",
+                    audioAscending = settings["audioAscending"] == "true",
+                    filePattern = resolveFilePattern(pages.size > 1),
+                    forceHttp = settings["forceHttp"] == "true",
+                    isCheese = info.isCheese,
+                    upperName = info.upperName,
+                    desc = info.desc,
+                    pubTime = info.pubTime,
+                    bvid = info.bvid,
+                    ownerMid = info.ownerMid,
+                )
+                TaskManager.add(task)
+            }
+            toast("已加入下载队列")
+            clearAddTaskState()
+            addTaskInput = ""
+            navigate(View.Explorer)
+        } catch (e: Exception) {
+            toast("添加任务失败：${e.message}", true)
+        }
+    }
+
+    private fun resolveFilePattern(multiPage: Boolean): String {
+        val key = if (multiPage) "filePatternMultiPage" else "filePattern"
+        return settings[key] ?: ""
+    }
+
+    // ==================== 任务操作 ====================
+
+    fun pauseTask(id: String) { TaskManager.pause(id); toast("已暂停") }
+    fun resumeTask(id: String) { TaskManager.get(id)?.let { TaskManager.resumePausedTask(it) } }
+    fun cancelTask(id: String) { TaskManager.cancel(id); toast("已取消") }
+    fun retryTask(id: String) { TaskManager.get(id)?.let { TaskManager.resumeTask(it) } }
+    fun removeTask(id: String) {
+        TaskManager.remove(id)
+        if (selectedTaskId == id) selectedTaskId = null
+    }
+    fun clearFinished() { TaskManager.clearFinished(); toast("已清理已完成任务") }
+
+    // ==================== 搜索 ====================
+
+    fun changeSearchMode(mode: Int) {
+        if (searchMode == mode) return
+        searchMode = mode
+        upperResults = emptyList(); videoResults = emptyList(); searchError = null
+    }
+
+    fun search(keyword: String) = viewModelScope.launch {
+        val kw = keyword.trim()
+        if (kw.isEmpty()) { toast("请输入关键词", true); return@launch }
+        searchKeyword = kw
+        searchLoading = true
+        searchError = null
+        upperResults = emptyList(); videoResults = emptyList()
+        try {
+            if (searchMode == 0) {
+                val list = withContext(Dispatchers.IO) { bridgeSearchUpper(kw) }
+                upperResults = list
+                if (list.isEmpty()) searchError = "未找到相关UP主"
+            } else {
+                val list = withContext(Dispatchers.IO) { bridgeSearchVideo(kw) }
+                videoResults = list
+                if (list.isEmpty()) searchError = "未找到相关视频"
+            }
+        } catch (e: Exception) {
+            searchError = e.message ?: "搜索失败"
+        } finally {
+            searchLoading = false
+        }
+    }
+
+    /** 打开 UP 主投稿列表 */
+    fun openUpper(upper: UpperItem) = viewModelScope.launch {
+        currentUpper = upper
+        upperReqSeq++
+        upperVideos = PagedState(loading = true)
+        loadUpperVideos(1)
+    }
+
+    fun backFromUpper() {
+        currentUpper = null
+        upperVideos = PagedState()
+    }
+
+    fun loadUpperVideos(page: Int) = viewModelScope.launch {
+        val upper = currentUpper ?: return@launch
+        val token = ++upperReqSeq
+        val prev = upperVideos
+        upperVideos = prev.copy(loading = true, error = null)
+        try {
+            val (items, total) = withContext(Dispatchers.IO) { bridgeGetUpperVideos(upper.mid, page) }
+            if (token != upperReqSeq) return@launch
+            upperVideos = PagedState(items = items, total = total, page = page)
+        } catch (e: Exception) {
+            if (token != upperReqSeq) return@launch
+            // 失败回滚：保留上一页，只有首页失败才显示错误态
+            upperVideos = if (prev.items.isEmpty()) {
+                prev.copy(loading = false, error = e.message ?: "加载失败", page = 1)
+            } else {
+                prev.copy(loading = false)
+            }.also { if (prev.items.isNotEmpty()) toast("加载失败：${e.message}", true) }
+        }
+    }
+
+    // ==================== 账号：关注 ====================
+
+    fun loadFollowings(page: Int = 1, reset: Boolean = page == 1) = viewModelScope.launch {
+        val token = ++followReqSeq
+        val prev = followings
+        followings = if (reset) PagedState(loading = true) else prev.copy(loading = true, error = null)
+        try {
+            val (items, total) = withContext(Dispatchers.IO) {
+                bridgeGetFollowings(userId, page, followOrder, currentFollowTag)
+            }
+            if (token != followReqSeq) return@launch
+            val merged = if (reset) items else prev.items + items
+            followings = PagedState(items = merged, total = total, page = page)
+        } catch (e: Exception) {
+            if (token != followReqSeq) return@launch
+            followings = prev.copy(loading = false, error = if (prev.items.isEmpty()) e.message else null)
+            toast("加载关注列表失败：${e.message}", true)
+        }
+    }
+
+    fun changeFollowTag(tagId: Int) { currentFollowTag = tagId; loadFollowings(1, true) }
+    fun changeFollowOrder(order: String) { followOrder = order; loadFollowings(1, true) }
+
+    fun loadFollowTags() = viewModelScope.launch {
+        followTags = runCatching { withContext(Dispatchers.IO) { bridgeGetFollowTags() } }.getOrDefault(emptyList())
+    }
+
+    // ==================== 账号：收藏夹 ====================
+
+    fun loadFavFolders() = viewModelScope.launch {
+        favFoldersLoading = true
+        favFoldersError = null
+        try {
+            val list = withContext(Dispatchers.IO) { bridgeGetFavFolders(userId) }
+            favFolders = list
+        } catch (e: Exception) {
+            favFoldersError = e.message ?: "加载失败"
+        } finally {
+            favFoldersLoading = false
+        }
+    }
+
+    fun openFavFolder(folder: FavFolderItem) = viewModelScope.launch {
+        currentFavFolder = folder
+        favReqSeq++
+        favList = PagedState(loading = true)
+        loadFavList(1)
+    }
+
+    fun backFromFavFolder() { currentFavFolder = null; favList = PagedState() }
+
+    fun loadFavList(page: Int) = viewModelScope.launch {
+        val folder = currentFavFolder ?: return@launch
+        val token = ++favReqSeq
+        val prev = favList
+        favList = prev.copy(loading = true, error = null)
+        try {
+            val (items, total) = withContext(Dispatchers.IO) { bridgeGetFavList(folder.id, page) }
+            if (token != favReqSeq) return@launch
+            favList = PagedState(items = items, total = total, page = page)
+        } catch (e: Exception) {
+            if (token != favReqSeq) return@launch
+            favList = if (prev.items.isEmpty()) {
+                prev.copy(loading = false, error = e.message ?: "加载失败", page = 1)
+            } else {
+                prev.copy(loading = false)
+            }.also { if (prev.items.isNotEmpty()) toast("加载失败：${e.message}", true) }
+        }
+    }
+
+    // ==================== 诊断 ====================
+
+    fun loadDebugLogs() = viewModelScope.launch {
+        debugLogs = runCatching { withContext(Dispatchers.IO) { bridgeGetDebugLogs() } }.getOrDefault("")
+    }
+
+    fun clearDebugLogs() = viewModelScope.launch {
+        withContext(Dispatchers.IO) { runCatching { bridgeClearDebugLogs() } }
+        debugLogs = ""
+    }
+
+    fun loadCrashLogs() = viewModelScope.launch {
+        crashLogs = runCatching { withContext(Dispatchers.IO) { bridgeGetCrashLogs() } }.getOrDefault(emptyList())
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        pollJob?.cancel()
+    }
+
+    // ==================== 桥接原语 ====================
+    // 这些方法把原 BBDownBridge 的 @JavascriptInterface 搬成普通方法。
+    // 具体实现放在 Bridge.kt（同一包内 extension），保持本文件专注状态管理。
+}
+
+/** parseUrl+getVideoInfo 的解析结果 */
+data class ResolvedVideo(val url: String, val info: VideoInfo)
+
+/** 登录态快照 */
+data class LoginSnapshot(
+    val webLogin: Boolean,
+    val tvLogin: Boolean,
+    val uname: String,
+    val mid: String,
+    val face: String,
+)
