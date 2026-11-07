@@ -48,6 +48,7 @@ import com.bbdown.app.ui.components.SectionTitle
 import com.bbdown.app.ui.components.StaggeredItem
 import com.bbdown.app.ui.components.StatusBadge
 import com.bbdown.app.ui.theme.AppTheme
+import com.bbdown.app.ui.theme.Spec
 import com.bbdown.app.ui.theme.Dimens
 
 /**
@@ -96,7 +97,7 @@ fun AccountScreen(vm: AppViewModel) {
                             .clip(RoundedCornerShape(Dimens.radiusLg))
                             .background(c.cardBg)
                             .border(1.dp, c.cardBorder, RoundedCornerShape(Dimens.radiusLg))
-                            .padding(14.dp),
+                            .padding(Spec.UserCard.padding),
                     ) {
                         Column {
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -211,8 +212,8 @@ private fun FollowItem(u: UpperItem, onClick: () -> Unit) {
     PressableBox(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
-            .clip(RoundedCornerShape(Dimens.radiusMd))
-            .background(c.cardBg).padding(horizontal = 10.dp, vertical = 8.dp),
+            .clip(RoundedCornerShape(Spec.UpperItem.radius))
+            .background(c.cardBg).padding(horizontal = Spec.UpperItem.padH, vertical = Spec.UpperItem.padV),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Avatar(u.face, u.uname, 34.dp)
@@ -244,9 +245,9 @@ private fun FavFolderCard(f: FavFolderItem, onClick: () -> Unit) {
     PressableBox(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
-            .clip(RoundedCornerShape(Dimens.radiusMd))
-            .background(c.cardBg).border(1.dp, c.cardBorder, RoundedCornerShape(Dimens.radiusMd))
-            .padding(horizontal = 10.dp, vertical = 10.dp),
+            .clip(RoundedCornerShape(Spec.FavFolderCard.radius))
+            .background(c.cardBg).border(1.dp, c.cardBorder, RoundedCornerShape(Spec.FavFolderCard.radius))
+            .padding(Spec.FavFolderCard.padding),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(

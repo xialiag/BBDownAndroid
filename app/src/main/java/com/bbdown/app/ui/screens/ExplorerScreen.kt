@@ -36,7 +36,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -53,6 +56,7 @@ import com.bbdown.app.ui.components.SmoothProgressBar
 import com.bbdown.app.ui.components.StaggeredItem
 import com.bbdown.app.ui.components.StatusBadge
 import com.bbdown.app.ui.theme.AppTheme
+import com.bbdown.app.ui.theme.Spec
 import com.bbdown.app.ui.theme.Dimens
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -122,7 +126,8 @@ fun ExplorerScreen(vm: AppViewModel) {
 private fun TaskList(vm: AppViewModel, tasks: List<DownloadTask>) {
     val c = AppTheme.colors
     if (tasks.isEmpty()) {
-        EmptyHero()
+        // 原版 .welcome-hero 是文档流顶部排列，不垂直居中
+        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Top) { EmptyHero() }
         return
     }
     LazyColumn(
@@ -150,26 +155,78 @@ private fun TaskList(vm: AppViewModel, tasks: List<DownloadTask>) {
     }
 }
 
+/**
+ * 空状态，严格对齐原版：
+ *   .welcome-hero{ text-align:center; padding:32px 16px 24px }
+ *   .logo-big{ width:64px; height:64px; margin:0 auto 14px }
+ *   .welcome-hero h1{ font-size:26px; font-weight:200; letter-spacing:.5px }
+ *   .welcome-hero .ver{ color:accent; font-size:12px; margin-top:4px; letter-spacing:1px }
+ */
 @Composable
 private fun EmptyHero() {
     val c = AppTheme.colors
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            // 图标淡入 + 轻微放大，呼应 WebView 版的静态 logo
-            val scale by animateFloatAsState(1f, tween(600), label = "hero")
-            Box(
-                Modifier
-                    .size(56.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(c.accent.copy(alpha = 0.18f)),
-                contentAlignment = Alignment.Center,
-            ) { Text("↓", color = c.accent, fontSize = 26.sp, fontWeight = FontWeight.Bold) }
-            Spacer(Modifier.height(14.dp))
-            Text("BBDown", color = c.fgBright, fontSize = 26.sp, fontWeight = FontWeight.Bold)
-            Text("B站视频下载器", color = c.accent, fontSize = 12.sp)
-            Spacer(Modifier.height(20.dp))
-            Text("点击左侧「新建下载」开始", color = c.fgDim, fontSize = 13.sp)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            // 实测：原版 logo 顶距内容区顶 94.9dp（.tabs 占位 35dp + padding 32dp + 余量），
+            // 当前仅 76.9dp，补足到一致位置
+            .padding(start = Spec.WelcomeHero.padH, end = Spec.WelcomeHero.padH, top = Spec.WelcomeHero.padTop + 18.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        // .logo-big：原版内联 SVG（viewBox 0 0 24 24, 56x56 渲染）
+        //   <rect x=2 y=2 w=20 h=20 rx=5 fill="#FAD4E0"/>
+        //   <path fill="#FFF" d="M11,7 L13,7 L13,12 L14.5,10.5 L16,12 L12,16 L8,12 L9.5,10.5 L11,12 Z"/>
+        //   <rect x=7.5 y=16.8 w=9 h=2 rx=.5 fill="#FFF"/>
+        // 用 Canvas 按 24x24 坐标系等比绘制，保证与原版形状完全一致。
+        // 原版 SVG 严格按 viewBox 0 0 24 24 等比绘制（logo 盒 64dp → 每单位 64/24 = 2.667dp）
+        Canvas(Modifier.size(Spec.WelcomeHero.logoSize)) {
+            val u = size.width / 24f
+            // rect x=2 y=2 w=20 h=20 rx=5 fill=#FAD4E0
+            drawRoundRect(
+                color = Color(0xFFFAD4E0),
+                topLeft = Offset(2 * u, 2 * u),
+                size = androidx.compose.ui.geometry.Size(20 * u, 20 * u),
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(5 * u, 5 * u),
+            )
+            // path fill=#FFF: M11,7 L13,7 L13,12 L14.5,10.5 L16,12 L12,16 L8,12 L9.5,10.5 L11,12 Z
+            val arrow = androidx.compose.ui.graphics.Path().apply {
+                moveTo(11f * u, 7f * u)
+                lineTo(13f * u, 7f * u)
+                lineTo(13f * u, 12f * u)
+                lineTo(14.5f * u, 10.5f * u)
+                lineTo(16f * u, 12f * u)
+                lineTo(12f * u, 16f * u)
+                lineTo(8f * u, 12f * u)
+                lineTo(9.5f * u, 10.5f * u)
+                lineTo(11f * u, 12f * u)
+                close()
+            }
+            drawPath(arrow, Color.White)
+            // rect x=7.5 y=16.8 w=9 h=2 rx=0.5 fill=#FFF
+            drawRoundRect(
+                color = Color.White,
+                topLeft = Offset(7.5f * u, 16.8f * u),
+                size = androidx.compose.ui.geometry.Size(9f * u, 2f * u),
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(0.5f * u, 0.5f * u),
+            )
         }
+        Spacer(Modifier.height(Spec.WelcomeHero.logoMarginBottom))
+        Text(
+            "BBDown",
+            color = c.fgBright,
+            fontSize = Spec.WelcomeHero.h1Size,
+            fontWeight = Spec.WelcomeHero.h1Weight,
+            letterSpacing = Spec.WelcomeHero.h1LetterSpacing,
+        )
+        Spacer(Modifier.height(Spec.WelcomeHero.verMarginTop))
+        Text(
+            "B站视频下载器",
+            color = c.accent,
+            fontSize = Spec.WelcomeHero.verSize,
+            letterSpacing = Spec.WelcomeHero.verLetterSpacing,
+        )
+        Spacer(Modifier.height(12.dp))
+        Text("点击左侧「新建下载」开始", color = c.fgDim, fontSize = 13.sp)
     }
 }
 

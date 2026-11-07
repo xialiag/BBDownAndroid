@@ -100,6 +100,10 @@ class MainActivity : AppCompatActivity() {
 
         WindowCompat.setDecorFitsSystemWindows(window, true)
         window.statusBarColor = Color.parseColor("#FB7299")
+        // 导航栏透明并延伸到内容下方（原版 WebView viewport-fit=cover 的效果）
+        // 导航栏跟随主题深色（原版 WebView 由页面背景自然延伸）
+        window.navigationBarColor = Color.parseColor("#1a1a1e")
+        WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightNavigationBars = false
         WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightStatusBars = false
 
         // 初始化任务管理器上下文

@@ -57,6 +57,7 @@ import com.bbdown.app.ui.components.Pill
 import com.bbdown.app.ui.components.PressableBox
 import com.bbdown.app.ui.components.StaggeredItem
 import com.bbdown.app.ui.theme.AppTheme
+import com.bbdown.app.ui.theme.Spec
 import com.bbdown.app.ui.theme.Dimens
 
 /**
@@ -170,10 +171,10 @@ private fun UpperCard(u: UpperItem, onClick: () -> Unit) {
     PressableBox(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth()
-            .clip(RoundedCornerShape(Dimens.radiusLg))
+            .clip(RoundedCornerShape(Spec.UpperCard.radius))
             .background(c.cardBg)
-            .border(1.dp, c.cardBorder, RoundedCornerShape(Dimens.radiusLg))
-            .padding(10.dp),
+            .border(1.dp, c.cardBorder, RoundedCornerShape(Spec.UpperCard.radius))
+            .padding(Spec.UpperCard.padding),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Avatar(u.face, u.uname, 40.dp)
@@ -295,10 +296,10 @@ internal fun VideoCard(v: VideoItem, onClick: () -> Unit) {
     PressableBox(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth()
-            .clip(RoundedCornerShape(Dimens.radiusLg))
+            .clip(RoundedCornerShape(Spec.VcItem.radius))
             .background(c.cardBg)
-            .border(1.dp, c.cardBorder, RoundedCornerShape(Dimens.radiusLg))
-            .padding(8.dp),
+            .border(1.dp, c.cardBorder, RoundedCornerShape(Spec.VcItem.radius))
+            .padding(Spec.VcItem.padding),
     ) {
         Row {
             Box(
@@ -324,7 +325,7 @@ internal fun VideoCard(v: VideoItem, onClick: () -> Unit) {
             }
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
-                Text(v.title, color = c.fgBright, fontSize = 12.5.sp,
+                Text(v.title, color = c.fgBright, fontSize = Spec.VcItem.titleSize,
                     fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.height(4.dp))
                 if (v.ownerName.isNotEmpty()) {
