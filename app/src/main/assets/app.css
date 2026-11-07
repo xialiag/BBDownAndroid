@@ -392,6 +392,9 @@ input::placeholder,textarea::placeholder{color:var(--fg-dim);opacity:.6}
 .btn-danger{background:var(--danger-bg);color:var(--danger-fg)}
 .btn-danger:active{filter:brightness(.92);transform:scale(.95)}
 .btn-row{display:flex;gap:8px;margin-top:18px;flex-wrap:wrap}
+/* 列表分页条（UP投稿/收藏夹共用）：居中排列，左右按钮+页码信息 */
+.fav-pagination{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:14px;flex-wrap:wrap}
+.page-info{font-size:12px;color:var(--fg-dim)}
 .btn-block{width:100%}
 
 .detail-cover{width:100%;max-height:200px;object-fit:contain;border-radius:8px;background:var(--card-bg);margin-bottom:14px}

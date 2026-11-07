@@ -331,9 +331,11 @@ object TaskManager {
         tasks[id]?.let { t ->
             if (t.isRunning) {
                 // 正在下载/解析/合并中的任务：中断下载器
+                val wasMuxing = t.status == DownloadTask.STATUS_MUXING
                 t.status = DownloadTask.STATUS_PAUSED
                 t.speed = 0
                 downloaders[id]?.cancel()
+                if (wasMuxing) com.bbdown.app.core.FFmpegMuxer.cancelCurrent()
             } else if (t.status == DownloadTask.STATUS_PENDING) {
                 // 排队等待中的任务：直接标记暂停，executor 中的任务开始时会检查此状态
                 t.status = DownloadTask.STATUS_PAUSED
@@ -392,8 +394,12 @@ object TaskManager {
 
     fun cancel(id: String) {
         tasks[id]?.let { t ->
+            // 先判断是否在混流，再改状态（否则 STATUS_MUXING 已被覆盖，判断恒假）
+            val wasMuxing = t.status == DownloadTask.STATUS_MUXING
             t.status = DownloadTask.STATUS_CANCELED
             downloaders[id]?.cancel()
+            // 正在混流的任务：杀掉 FFmpeg session，否则会一直占到超时
+            if (wasMuxing) com.bbdown.app.core.FFmpegMuxer.cancelCurrent()
         }
         try { TaskStore.save() } catch (_: Exception) {}
     }

@@ -35,6 +35,28 @@ object FFmpegMuxer {
     /** 串行化所有 FFmpegKit 调用：FFmpegKit 使用全局 FFmpeg 上下文，不支持并发执行。 */
     private val ffmpegLock = Any()
 
+    /** 当前正在执行的 FFmpeg session（混流/注入），供 cancelCurrent() 中断 */
+    @Volatile
+    private var currentSession: com.arthenica.ffmpegkit.FFmpegSession? = null
+
+    /** 取消当前 FFmpeg 会话（任务取消/暂停时调用），使持锁等待的混流立即退出 */
+    fun cancelCurrent() {
+        val s = currentSession ?: return
+        try { FFmpegKit.cancel(s.sessionId) } catch (_: Throwable) {}
+    }
+
+    /** 按输入体积估算超时：混流约 30s/百 MB，下限 2 分钟，上限 30 分钟 */
+    private fun timeoutMsFor(cmd: List<String>): Long {
+        var bytes = 0L
+        for (arg in cmd) {
+            if (!arg.startsWith("/")) continue
+            val f = File(arg)
+            if (f.isFile) bytes += f.length()
+        }
+        val est = 120_000L + bytes / (100L * 1024 * 1024) * 30_000L
+        return est.coerceIn(120_000L, 30L * 60_000L)
+    }
+
     /**
      * Native 堆极度不足阈值（MB）：低于此值才跳过 FFmpeg 执行。
      * 注意：[Debug.getNativeHeapFreeSize] 只反映当前 arena 内的空闲量，
@@ -221,18 +243,16 @@ object FFmpegMuxer {
 
         val success = execute(cmd, outputFile)
         if (success) {
-            // 使用 copy+delete 替代 delete+rename，防止 renameTo 失败导致数据丢失
+            // REPLACE_EXISTING 已原子替换，先 delete 会让"move 失败"变成原文件已丢
             try {
-                if (file.exists()) file.delete()
                 java.nio.file.Files.move(
                     outputFile.toPath(), file.toPath(),
                     java.nio.file.StandardCopyOption.REPLACE_EXISTING
                 )
                 Logger.i("FFmpegMuxer", "元数据注入完成: ${file.name} (${file.length()}字节)")
             } catch (e: Exception) {
-                Logger.e("FFmpegMuxer", "替换原文件失败: ${e.message}")
-                // 回退：outputFile 已是最终结果，直接使用
-                Logger.i("FFmpegMuxer", "使用输出文件: ${outputFile.name}")
+                // 替换失败时保留 outputFile（含元数据的成品），调用方拿到的是依然可播的文件
+                Logger.e("FFmpegMuxer", "替换原文件失败: ${e.message}，保留输出文件 ${outputFile.name}")
             }
             if (jpegCover != null && jpegCover != coverFile) {
                 jpegCover.delete()
@@ -365,22 +385,38 @@ object FFmpegMuxer {
         synchronized(ffmpegLock) {
             NativeCrashDetector.beforeFFmpeg(cmd)
             try {
-                val session = FFmpegKit.executeWithArguments(cmd.toTypedArray())
-                val returnCode = session.returnCode
-
-                if (ReturnCode.isSuccess(returnCode)) {
-                    Logger.i("FFmpegMuxer", "成功: ${outputFile.name} (${outputFile.length()}字节)")
-                    return outputFile.exists() && outputFile.length() > 0
-                } else {
-                    Logger.e("FFmpegMuxer", "失败: rc=${returnCode.value}")
-                    val logs = session.allLogsAsString
-                    if (logs != null && logs.isNotEmpty()) {
-                        val tail = if (logs.length > 1500) logs.substring(logs.length - 1500) else logs
-                        Logger.e("FFmpegMuxer", "FFmpeg日志(尾部):\n$tail")
+                // 用 executeAsync + 轮询 session 状态实现"可超时、可取消"，避免混流卡死永久占用 ffmpegLock
+                val session = FFmpegKit.executeWithArgumentsAsync(cmd.toTypedArray(), null)
+                currentSession = session
+                val deadline = System.currentTimeMillis() + timeoutMsFor(cmd)
+                while (true) {
+                    val rc = session.returnCode
+                    if (rc != null) {
+                        if (ReturnCode.isSuccess(rc)) {
+                            Logger.i("FFmpegMuxer", "成功: ${outputFile.name} (${outputFile.length()}字节)")
+                            return outputFile.exists() && outputFile.length() > 0
+                        }
+                        Logger.e("FFmpegMuxer", "失败: rc=${rc.value}")
+                        val logs = session.allLogsAsString
+                        if (logs != null && logs.isNotEmpty()) {
+                            val tail = if (logs.length > 1500) logs.substring(logs.length - 1500) else logs
+                            Logger.e("FFmpegMuxer", "FFmpeg日志(尾部):\n$tail")
+                        }
+                        return false
                     }
-                    return false
+                    if (System.currentTimeMillis() > deadline) {
+                        Logger.e("FFmpegMuxer", "超时 ${timeoutMsFor(cmd) / 1000}s，终止 FFmpeg session")
+                        try { FFmpegKit.cancel(session.sessionId) } catch (_: Throwable) {}
+                        return false
+                    }
+                    try { Thread.sleep(200) } catch (_: InterruptedException) {
+                        // 上层取消任务时打断等待线程 → 立刻杀 session 释放锁
+                        try { FFmpegKit.cancel(session.sessionId) } catch (_: Throwable) {}
+                        throw InterruptedException("FFmpeg 混流已取消")
+                    }
                 }
             } finally {
+                currentSession = null
                 NativeCrashDetector.afterFFmpeg()
                 cleanupAfterFFmpeg()
             }
@@ -445,10 +481,8 @@ object FFmpegMuxer {
             // 清除 session 历史，释放 native 内存（防止批量下载时累积）
             FFmpegKitConfig.clearSessions()
         } catch (_: Throwable) {}
-        System.gc()
-        try { Thread.sleep(300) } catch (_: InterruptedException) {}
-        val freeMB = nativeHeapFreeMB()
-        Logger.i("FFmpegMuxer", "FFmpeg后清理(clearSessions+GC): Native堆空闲 ${freeMB}MB")
+        // 只清 session，不在锁内做 GC/sleep：GC 停顿会被串行放大到所有排队中的任务
+        Logger.i("FFmpegMuxer", "FFmpeg后清理(clearSessions): Native堆空闲 ${nativeHeapFreeMB()}MB")
     }
 
     private fun nativeHeapFreeMB(): Long =

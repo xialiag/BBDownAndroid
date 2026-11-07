@@ -1,4 +1,4 @@
-/* ===== BBDown Android — 前端逻辑 v2.0.17 ===== */
+/* ===== BBDown Android — 前端逻辑 v2.0.18 ===== */
 /* 包含: 扫码登录、批量下载、多线程下载、任务管理、调试日志 */
 
 /* ---------- 原生桥接 Promise 封装 ---------- */
@@ -6,8 +6,12 @@ let _bseq = 0;
 const _bres = {};
 window.__onBridge = function(reqId, result){
   const r = _bres[reqId];
-  if(r){ delete _bres[reqId]; result.ok ? r.resolve(result.data) : r.reject(result.error); }
+  // error 兜底：后端异常响应缺 error 字段时 reject(undefined/null) 会让界面显示 "null/undefined"
+  if(r){ delete _bres[reqId]; result.ok ? r.resolve(result.data) : r.reject(result.error || '接口返回异常（可能网页版登录已失效，请到账号页重新扫码）'); }
 };
+/* 错误文案含"未登录/登录失效"时提示去账号页扫码（登录态过期是所有"点了没反应"的常见根因） */
+function isLoginErr(e){ const s = String(e||''); return /未登录|登录已?失效|expired/i.test(s); }
+function loginExpiredTip(){ toast('网页版登录已失效，请到「账号」页重新扫码登录','err'); }
 /* 生成登录信息签名，用于检测是否有实质变化（避免无意义的重渲染导致闪烁） */
 function _loginInfoSig(info){
   if(!info) return 'none';
@@ -337,7 +341,7 @@ function csToggle(id){
       if(s.bandwidth) subParts.push(esc(s.bandwidth));
       if(s.size) subParts.push(esc(s.size));
       return `
-      <div class="cs-option cs-option-stream ${s.key===curVal?'sel':''}" onclick="csSelectStream('${id}','${esc(s.key)}','${esc(shortLabel)}')">
+      <div class="cs-option cs-option-stream ${s.key===curVal?'sel':''}" onclick="csSelectStream('${id}',this.dataset.val,this.dataset.label)" data-val="${esc(s.key)}" data-label="${esc(shortLabel)}">
         <div class="cos-body">
           <div class="cos-main"><span class="cos-dfn">${esc(s.dfn)}</span>${s.fps?`<span class="cos-fps">${esc(s.fps)}fps</span>`:''}</div>
           <div class="cos-sub">${subParts.join(' · ')}</div>
@@ -350,7 +354,7 @@ function csToggle(id){
     if(!opts) return;
     const curVal = window._csVal[id];
     panel.innerHTML = opts.map(([v,l])=>`
-      <div class="cs-option ${v===curVal?'sel':''}" onclick="csSelect('${id}','${esc(v)}','${esc(l)}')">
+      <div class="cs-option ${v===curVal?'sel':''}" onclick="csSelect('${id}',this.dataset.val,this.dataset.label)" data-val="${esc(v)}" data-label="${esc(l)}">
         <span>${esc(l)}</span>
         <svg class="cs-check" viewBox="0 0 14 14"><path fill="currentColor" d="M5.5 10L2 6.5l1-1L5.5 8l5-5 1 1z"/></svg>
       </div>`).join('');
@@ -1186,7 +1190,7 @@ function renderTaskDetail(eb, t){
             <span class="fi-name">${esc(fileName)}</span>
             ${dirPath ? `<span class="fi-path-full">${esc(dirPath)}</span>` : ''}
           </div>
-          <button class="btn btn-sec" style="font-size:11px;padding:4px 10px;flex:0 0 auto" onclick="openFile('${esc(f)}')">打开</button>
+          <button class="btn btn-sec" style="font-size:11px;padding:4px 10px;flex:0 0 auto" onclick="openFile(this.dataset.path)" data-path="${esc(f)}">打开</button>
         </div>`;
       }).join('')}
     ` : ''}
@@ -1647,7 +1651,7 @@ async function doBatchDownload(){
     state.selectedTaskId = null;
     state._skipAutoSelect = true;
     switchView('explorer');
-  }catch(e){ toast('批量下载失败：'+e,'err'); }
+  }catch(e){ toast('批量下载失败：'+e,'err'); if(isLoginErr(e)) loginExpiredTip(); }
 }
 
 function selectAllPages(all){
@@ -1826,7 +1830,7 @@ async function doSearch(){
       state._searchResults = results;
     }
     renderEditor();
-  }catch(e){ toast('搜索失败：'+e,'err'); }
+  }catch(e){ toast('搜索失败：'+e,'err'); if(isLoginErr(e)) loginExpiredTip(); }
 }
 
 function renderVideoSearchResultList(eb){
@@ -1842,7 +1846,7 @@ function renderVideoSearchResultList(eb){
     ${subHeader('搜索结果', "state._videoSearchResults=null;renderEditor()")}
     <p class="lead">找到 ${results.length} 个视频</p>
     <div class="vc-list">
-      ${results.map(v=>videoCardHTML(v, {onclick:`downloadFromSearch('${esc(v.bvid)}')`, showUpper:true})).join('')}
+      ${results.map(v=>videoCardHTML(v, {onclick:`downloadFromSearch(this.dataset.bvid)`, dataAttrs:{bvid:v.bvid}, showUpper:true})).join('')}
     </div>
   </div>`;
 }
@@ -1886,7 +1890,7 @@ function renderSearchResultList(eb){
     <p class="lead">找到 ${results.length} 个UP主</p>
     <div class="upper-search-list">
       ${results.map(u=>`
-        <div class="upper-card" onclick="openUpperSpace('${esc(u.mid)}','${esc(u.uname)}','${esc(u.face||'')}',${u.officialType!=null?u.officialType:-1},${u.vipType||0},${u.vipStatus||0})">
+        <div class="upper-card" onclick="openUpperSpace(this.dataset.mid,this.dataset.uname,this.dataset.face,+this.dataset.officialType,+this.dataset.vipType,+this.dataset.vipStatus)" data-mid="${esc(u.mid)}" data-uname="${esc(u.uname)}" data-face="${esc(u.face||'')}" data-official-type="${u.officialType!=null?u.officialType:-1}" data-vip-type="${u.vipType||0}" data-vip-status="${u.vipStatus||0}">
           ${renderAvatarWrap(u.face, u.uname, u.officialType, 'lg')}
           <div class="uc-body">
             <div class="uc-name">${renderUpperName(u.uname, u.vipType, u.vipStatus, '')}</div>
@@ -1916,6 +1920,7 @@ function openUpperSpace(mid, uname, face, officialType, vipType, vipStatus){
   state._upperVideos = null;
   state._upperPage = 1;
   state._upperTotal = 0;
+  state._upperLoadError = null;
   // 切换到搜索视图（投稿视频列表在 renderSearch 中渲染）
   // 不能直接设 innerHTML，否则 loadUpperVideos→renderEditor 会因 currentView 仍是 account 而回退
   if(state.currentView !== 'search'){
@@ -1941,6 +1946,7 @@ function exitUpperSpace(){
   state._upperVipStatus = 0;
   state._upperPage = 1;
   state._upperTotal = 0;
+  state._upperLoadError = null;
   state._upperSelMode = false;
   state._upperSelected = new Set();
   const returnView = state._upperReturnView || 'search';
@@ -1953,18 +1959,30 @@ function exitUpperSpace(){
 }
 
 async function loadUpperVideos(page){
+  const prevPage = state._upperPage || 1;
+  const prevVideos = state._upperVideos;
+  const prevTotal = state._upperTotal || 0;
   state._upperPage = page;
   try{
     const result = await callBridge('getUpperVideos', state._upperMid, page);
     state._upperVideos = result.items || [];
     state._upperTotal = result.total || 0;
+    state._upperLoadError = null;
     renderEditor();
   }catch(e){
-    // 加载失败：设置空数组触发 renderUpperVideoList 显示错误态，避免卡在加载中
-    state._upperVideos = [];
-    state._upperTotal = 0;
+    // 失败时回滚到上一页数据（翻页失败不清空列表），并记录错误供渲染错误态+重试
+    if(page > 1 && prevVideos && prevVideos.length){
+      state._upperPage = prevPage;
+      state._upperVideos = prevVideos;
+      state._upperTotal = prevTotal;
+    } else {
+      state._upperVideos = [];
+      state._upperTotal = 0;
+    }
+    state._upperLoadError = String(e);
     renderEditor();
     toast('加载投稿视频失败：'+e,'err');
+    if(isLoginErr(e)) loginExpiredTip();
   }
 }
 
@@ -1990,8 +2008,12 @@ function renderUpperVideoList(eb){
         <button class="btn btn-sec" style="font-size:11px;padding:5px 10px" onclick="exitUpperSelectMode()">退出</button>
       </div>
       <p class="lead">${total > 0 ? total + ' 个投稿' : videos.length + ' 个投稿'} · 点击卡片勾选，可跨页选择</p>
-    ` : `<p class="lead">${total > 0 ? total + ' 个投稿' : videos.length + ' 个投稿'} · 长按视频可批量选择</p>`}
-    ${videos.length === 0 ? '<div class="empty-state">该UP主暂无投稿视频</div>' :
+    ` : (state._upperLoadError && videos.length===0
+      ? `<p class="lead">投稿视频</p>`
+      : `<p class="lead">${total > 0 ? total + ' 个投稿' : videos.length + ' 个投稿'} · 长按视频可批量选择</p>`)}
+    ${videos.length === 0 ? (state._upperLoadError
+      ? `<div class="empty-state" style="color:var(--error)">加载失败：${esc(state._upperLoadError)}<br><button class="btn btn-sec" style="margin-top:10px" onclick="loadUpperVideos(${page})">重试</button></div>`
+      : '<div class="empty-state">该UP主暂无投稿视频</div>') :
       `<div class="vc-list">
         ${videos.map(v=>{
           // 合并UP主信息（投稿视频列表中所有视频属于同一UP主）
@@ -2007,7 +2029,7 @@ function renderUpperVideoList(eb){
             // 选择模式：点击卡片切换勾选（videoCardHTML 检测到 checkboxData 自动绑定）
             return videoCardHTML(v2, {checkboxData:{bvid: bvid, checked: selSet.has(bvid), onchange:'toggleUpperSelect(this)', extraClass:'upper-check'}});
           }
-          return videoCardHTML(v2, {onclick:`downloadUpperVideo('${esc(bvid)}','${esc(v.title)}')`});
+          return videoCardHTML(v2, {onclick:`downloadUpperVideo(this.dataset.bvid,this.dataset.title)`, dataAttrs:{bvid:bvid, title:v.title}});
         }).join('')}
       </div>`
     }
@@ -2281,10 +2303,19 @@ function videoCardHTML(v, opts){
     clickAttr = ` onclick="vcToggleCheck(this)"`;
     hasClick = true;
   }
+  // dataAttrs：把标题等外部文本放进 data-* 属性，handler 用 this.dataset 取，
+  // 绝不把它们嵌进内联 onclick 的 JS 字符串（HTML 属性会先解码，实体转义在这里无效 → XSS）
+  let dataAttr = '';
+  if (opts.dataAttrs) {
+    for (const k in opts.dataAttrs) {
+      if (opts.dataAttrs[k] === undefined || opts.dataAttrs[k] === null) continue;
+      dataAttr += ` data-${k}="${esc(opts.dataAttrs[k])}"`;
+    }
+  }
 
   const checkedCls = (opts.checkboxData && opts.checkboxData.checked && !opts.checkboxData.disabled) ? ' vc-checked' : '';
 
-  return `<div class="vc-item${hasClick ? '' : ' vc-item-static'}${checkedCls}" data-bvid="${esc(bvid)}"${clickAttr}>
+  return `<div class="vc-item${hasClick ? '' : ' vc-item-static'}${checkedCls}" data-bvid="${esc(bvid)}"${dataAttr}${clickAttr}>
     ${coverWrap}
     <div class="vc-body">
       ${titleHtml}
@@ -2470,8 +2501,14 @@ function renderAccount(eb){
   </div>`;
 
   if(anyLogin){
-    loadFollowings(true);
-    loadFavFolders();
+    // 去重守卫：switchView 渲染 + initAccountView 登录刷新重渲染 + __onLoginUpdate 重渲染
+    // 会在几百毫秒内触发 3 次关注/收藏夹拉取（日志实证 3×重复请求），5秒内只加载一次
+    const now = Date.now();
+    if(!state._accountLoadsAt || now - state._accountLoadsAt > 5000){
+      state._accountLoadsAt = now;
+      loadFollowings(true);
+      loadFavFolders();
+    }
   }
 }
 
@@ -2850,6 +2887,11 @@ async function retryLoadTags(){
 async function loadFollowings(reset){
   const container = el('followingsContainer');
   if(!container) return;
+  // 请求令牌：连点/切分组时只让最后一次响应落地，防止慢响应覆盖新数据
+  const token = (state._followReqSeq = (state._followReqSeq||0) + 1);
+  const prevPage = state._followPage;
+  const prevList = state._followings;
+  const prevTotal = state._followTotal;
   try{
     const web = (state._loginInfo && state._loginInfo.web) || {};
     const tv = (state._loginInfo && state._loginInfo.tv) || {};
@@ -2869,6 +2911,7 @@ async function loadFollowings(reset){
     }
     const page = state._followPage;
     const res = await callBridge('getFollowings', mid, page, state._followOrderType, state._followTagId);
+    if(token !== state._followReqSeq) return; // 已有更新的请求，丢弃本次结果
     if(reset || !state._followings){
       state._followings = res.items || [];
     } else {
@@ -2878,7 +2921,13 @@ async function loadFollowings(reset){
     state._followTotal = res.total || 0;
     renderFollowings(container);
   }catch(e){
-    container.innerHTML = `<div style="color:var(--error);font-size:12px;padding:10px 0">加载关注列表失败：${esc(String(e))}</div>`;
+    if(token !== state._followReqSeq) return;
+    // 失败回滚页码与列表，避免"页码已跳但数据没到"造成的永久空洞
+    state._followPage = prevPage;
+    state._followings = prevList;
+    state._followTotal = prevTotal;
+    container.innerHTML = `<div style="color:var(--error);font-size:12px;padding:10px 0">加载关注列表失败：${esc(String(e))} <button class="btn btn-sec" style="font-size:11px;padding:3px 10px;margin-left:6px" onclick="loadFollowings(true)">重试</button></div>`;
+    if(isLoginErr(e)) loginExpiredTip();
   }
 }
 
@@ -2950,7 +2999,7 @@ function renderFollowings(container){
   container.innerHTML = `${tagBarHtml}${orderBarHtml}
   ${emptyTagHint}
   <div class="upper-list">${list.map(u=>`
-    <div class="upper-item" onclick="viewFollowingVideos('${esc(u.mid)}','${esc(u.uname)}','${esc(u.face||'')}',${u.officialType!=null?u.officialType:-1},${u.vipType||0},${u.vipStatus||0})">
+    <div class="upper-item" onclick="viewFollowingVideos(this.dataset.mid,this.dataset.uname,this.dataset.face,+this.dataset.officialType,+this.dataset.vipType,+this.dataset.vipStatus)" data-mid="${esc(u.mid)}" data-uname="${esc(u.uname)}" data-face="${esc(u.face||'')}" data-official-type="${u.officialType!=null?u.officialType:-1}" data-vip-type="${u.vipType||0}" data-vip-status="${u.vipStatus||0}">
       ${renderAvatarWrap(u.face, u.uname, u.officialType, 'sm')}
       <div class="upper-info">
         <div class="upper-name-row">${renderUpperName(u.uname, u.vipType, u.vipStatus, 'upper-name')}${u.special===1?'<span class="special-star" title="特别关注">★</span>':''}</div>
@@ -2981,7 +3030,8 @@ async function loadFavFolders(){
     state._favFolders = folders;
     renderFavFolders(container, folders);
   }catch(e){
-    container.innerHTML = `<div style="color:var(--error);font-size:12px;padding:10px 0">加载收藏夹失败：${esc(String(e))}</div>`;
+    container.innerHTML = `<div style="color:var(--error);font-size:12px;padding:10px 0">加载收藏夹失败：${esc(String(e))} <button class="btn btn-sec" style="font-size:11px;padding:3px 10px;margin-left:6px" onclick="loadFavFolders()">重试</button></div>`;
+    if(isLoginErr(e)) loginExpiredTip();
   }
 }
 
@@ -2991,7 +3041,7 @@ function renderFavFolders(container, folders){
     return;
   }
   container.innerHTML = `<div class="fav-folder-grid">${folders.map(f=>`
-    <div class="fav-folder-card" onclick="openFavFolder('${esc(f.id)}','${esc(f.title)}',${f.mediaCount})">
+    <div class="fav-folder-card" onclick="openFavFolder(this.dataset.id,this.dataset.title,+this.dataset.count)" data-id="${esc(f.id)}" data-title="${esc(f.title)}" data-count="${f.mediaCount}">
       <div class="ff-icon">
         <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z"/></svg>
       </div>
@@ -3012,11 +3062,18 @@ async function openFavFolder(mediaId, title, count){
   await loadFavList();
 }
 
-async function loadFavList(){
+async function loadFavList(page){
+  // 契约与 loadUpperVideos 一致：传目标页码，函数内部改 state._favPage，
+  // 失败时以进入函数前的 prevPage 为回滚基准（按钮不得先改 state）
+  const prevPage = state._favPage || 1;
+  const prevList = state._favList;
+  const prevTotal = state._favTotal || 0;
+  const target = page || prevPage;
+  state._favPage = target;
   const eb = editorBody();
   eb.innerHTML = `<div class="view">
     ${subHeader(state._favFolderTitle, "backToAccount()")}
-    <p class="lead">${state._favTotal} 个视频 · 第 ${state._favPage} 页</p>
+    <p class="lead">${state._favTotal} 个视频 · 第 ${target} 页</p>
     <div class="loading-pulse">${spinIcon()} 加载中…</div>
   </div>`;
   try{
@@ -3025,7 +3082,20 @@ async function loadFavList(){
     state._favTotal = res.total || state._favTotal;
     renderFavListView();
   }catch(e){
-    eb.innerHTML = `<div class="view">${subHeader(state._favFolderTitle, "backToAccount()")}<div style="color:var(--error)">加载失败：${esc(String(e))}</div></div>`;
+    const msg = String(e);
+    const failedPage = target;
+    // 翻页失败（非首页）：回滚进入本页前的列表并重渲染，仅 toast 提示
+    if(target > 1 && prevList && prevList.length){
+      state._favPage = prevPage;
+      state._favList = prevList;
+      state._favTotal = prevTotal;
+      renderFavListView();
+      toast('第'+failedPage+'页加载失败，已保留第'+prevPage+'页','err');
+    } else {
+      eb.innerHTML = `<div class="view">${subHeader(state._favFolderTitle, "backToAccount()")}<div style="color:var(--error)">加载失败：${esc(msg)} <button class="btn btn-sec" style="margin-top:8px" onclick="loadFavList(${target})">重试</button></div></div>`;
+      toast('加载收藏夹视频失败：'+msg,'err');
+    }
+    if(isLoginErr(e)) loginExpiredTip();
   }
 }
 
@@ -3053,8 +3123,8 @@ function renderFavListView(){
       ${items.map((v,i)=>videoCardHTML(v, {index:i+1, showUpper:true, checkboxData:{bvid:v.bvid, checked:false, onchange:'updateFavSelCount()', extraClass:'fv-check'}})).join('')}
     </div>
     <div class="btn-row" style="margin-top:14px">
-      ${state._favPage > 1 ? `<button class="btn btn-sec" onclick="state._favPage--;loadFavList()">上一页</button>` : ''}
-      ${state._favPage < totalPages ? `<button class="btn btn-sec" onclick="state._favPage++;loadFavList()">下一页</button>` : ''}
+      ${state._favPage > 1 ? `<button class="btn btn-sec" onclick="loadFavList(${state._favPage-1})">上一页</button>` : ''}
+      ${state._favPage < totalPages ? `<button class="btn btn-sec" onclick="loadFavList(${state._favPage+1})">下一页</button>` : ''}
     </div>
   </div>`;
   applyCachedImages(eb);
@@ -3981,8 +4051,8 @@ async function showCrashLogs(){
         <div class="cli-header" onclick="this.parentElement.classList.toggle('expanded')">
           <span class="cli-title">${esc(log.filename)}</span>
           <span class="cli-meta">${time} · ${sizeKB}KB</span>
-          <button class="cli-share" onclick="event.stopPropagation();shareCrashLog('${esc(log.filename)}')">分享</button>
-          <button class="cli-delete" onclick="event.stopPropagation();deleteCrashLog('${esc(log.filename)}')">删除</button>
+          <button class="cli-share" data-file="${esc(log.filename)}" onclick="event.stopPropagation();shareCrashLog(this.dataset.file)">分享</button>
+          <button class="cli-delete" data-file="${esc(log.filename)}" onclick="event.stopPropagation();deleteCrashLog(this.dataset.file)">删除</button>
           <span class="cli-toggle">▼</span>
         </div>
         <pre class="cli-content">${esc(log.content)}</pre>

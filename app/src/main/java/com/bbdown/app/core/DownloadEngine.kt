@@ -150,6 +150,10 @@ object DownloadEngine {
                             var lastVErr: Exception? = null
                             for (video in videoCandidates) {
                                 try {
+                                    // 状态只允许从"未进入下载"推进为 DOWNLOADING；
+                                    // 解析期间用户已点暂停/取消时不能被覆盖，否则下面两处检查变成死代码
+                                    if (task.status == DownloadTask.STATUS_CANCELED) { vFile?.delete(); return }
+                                    if (task.status == DownloadTask.STATUS_PAUSED) return
                                     task.status = DownloadTask.STATUS_DOWNLOADING
                                     // 混流模式用临时名（混流后删除）；skipMux 模式用最终名
                                     val vExt = if (task.skipMux) ".mp4" else ".vpart"
@@ -194,6 +198,9 @@ object DownloadEngine {
                         var aFile: File? = null
                         val audio = selectedAudio
                         if (audio != null) {
+                            // 同上：解析阶段用户已点暂停/取消时不得被 DOWNLOADING 覆盖
+                            if (task.status == DownloadTask.STATUS_CANCELED) { aFile?.delete(); return }
+                            if (task.status == DownloadTask.STATUS_PAUSED) return
                             task.status = DownloadTask.STATUS_DOWNLOADING
                             // 根据编码选择正确扩展名：FLAC → .flac，其他 → .m4a
                             val audioExt = if (audio.codecs == "FLAC") "flac" else "m4a"

@@ -168,6 +168,30 @@ class MainActivity : AppCompatActivity() {
             domStorageEnabled = true
         }
         webView.webViewClient = object : WebViewClient() {
+            /**
+             * 导航守卫：WebView 只允许停留在本地 assets 主文档。
+             * 任何其他导航（远程页面、data:/javascript: 等）都会把 AndroidBridge 暴露给不可信内容，
+             * 因此一律外跳系统浏览器并拦截（loadUrl 不会触发 shouldOverrideUrlLoading）。
+             */
+            override fun shouldOverrideUrlLoading(view: android.webkit.WebView?, request: android.webkit.WebResourceRequest?): Boolean {
+                val url = request?.url?.toString() ?: return true
+                if (url.startsWith("file:///android_asset/")) return false
+                try {
+                    startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                } catch (_: Exception) {}
+                return true
+            }
+
+            @Suppress("OverridingDeprecatedMember")
+            override fun shouldOverrideUrlLoading(view: android.webkit.WebView?, url: String?): Boolean {
+                val u = url ?: return true
+                if (u.startsWith("file:///android_asset/")) return false
+                try {
+                    startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(u)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                } catch (_: Exception) {}
+                return true
+            }
+
             override fun shouldInterceptRequest(view: android.webkit.WebView?, request: android.webkit.WebResourceRequest?): android.webkit.WebResourceResponse? {
                 val url = request?.url?.toString() ?: return null
                 if (url.contains("index.html") && url.startsWith("file://")) {
@@ -176,6 +200,9 @@ class MainActivity : AppCompatActivity() {
                         val inject = """<script>
 (function(){
   var _origAdd = AndroidBridge.addTask;
+  /* HTML 转义：视频标题来自 B站接口（可含 <img onerror=...>），直接拼进 innerHTML 就是 XSS，
+     而本脚本运行在挂了 AndroidBridge 的主 world，XSS 可直接读登录态/写文件。 */
+  function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];});}
   function fmtSz(b){if(!b||b<=0)return'';if(b>=1048576)return'~'+(b/1048576).toFixed(2)+' MB';return'~'+(b/1024).toFixed(1)+' KB';}
   /* 经前端全局 callBridge 请求流列表。注意 app.js 的 _bres/_bseq 是顶层 let/const，
      不会挂到 window 上（window._bres 恒 undefined），不能以 window.xxx 访问；
@@ -187,7 +214,7 @@ class MainActivity : AppCompatActivity() {
     var timer=setTimeout(function(){ bad('获取流信息超时'); },10000);
     try{ callBridge('getAvailableStreams',url).then(ok,bad); }catch(e){ bad(e); }
   }
-  function showOverlay(data,task){
+  function showOverlay(data,task,settle){
     var vids=data.videos||[],auds=data.audios||[];
     if(!vids.length&&!auds.length){toast('无可用流','err');return;}
     var old=document.getElementById('sp-ov');if(old)old.remove();
@@ -195,7 +222,7 @@ class MainActivity : AppCompatActivity() {
     ov.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px 0';
     var cd=document.createElement('div');
     cd.style.cssText='background:var(--bg,#1a1a2e);border:1px solid var(--border,#333);border-radius:12px;padding:20px;max-width:420px;width:90%;max-height:85vh;overflow-y:auto;color:var(--fg,#e0e0e0)';
-    var h='<div style="font-size:16px;font-weight:bold;margin-bottom:16px;text-align:center">'+(data.title||'选择流')+'</div>';
+    var h='<div style="font-size:16px;font-weight:bold;margin-bottom:16px;text-align:center">'+esc(data.title||'选择流')+'</div>';
     if(vids.length){
       h+='<div style="font-size:12px;color:var(--fg-dim,#888);margin-bottom:6px">视频流 ('+vids.length+')</div>';
       h+='<div id="sp-vw"></div>';
@@ -218,8 +245,10 @@ class MainActivity : AppCompatActivity() {
     var vid='sp_vs',aid='sp_as';
     if(vids.length&&typeof window.csHTML==='function'){document.getElementById('sp-vw').innerHTML=window.csHTML(vid,vOpts,vOpts[0][0]);window._csOpts[vid]=vOpts;window._csVal[vid]=vOpts[0][0];}
     if(auds.length&&typeof window.csHTML==='function'){document.getElementById('sp-aw').innerHTML=window.csHTML(aid,aOpts,aOpts[0][0]);window._csOpts[aid]=aOpts;window._csVal[aid]=aOpts[0][0];}
-    document.getElementById('sp-no').onclick=function(){ov.remove();};
-    ov.onclick=function(e){if(e.target===ov)ov.remove();};
+    /* 取消/点遮罩：必须 settle 原始 addTask 的 Promise，否则前端 callBridge 永远 pending（界面卡在"添加中"） */
+    function settleCancel(){ ov.remove(); if(settle)settle(); }
+    document.getElementById('sp-no').onclick=settleCancel;
+    ov.onclick=function(e){if(e.target===ov)settleCancel();};
   }
   AndroidBridge.addTask=function(reqId,tj){
     var t;
@@ -229,7 +258,7 @@ class MainActivity : AppCompatActivity() {
       var vids=(d&&d.videos)||[],auds=(d&&d.audios)||[];
       // 流少或无流时无需选择，直接按默认设置下载
       if(vids.length<=3){_origAdd.call(AndroidBridge,reqId,tj);return;}
-      showOverlay(d,t);
+      showOverlay(d,t,function(){ _origAdd.call(AndroidBridge,reqId,tj); });
       document.getElementById('sp-ok').onclick=function(){
         if(vids.length)t.videoId=window._csVal['sp_vs']||vids[0].id;
         if(auds.length)t.preferAudio=window._csVal['sp_as']||auds[0].id;

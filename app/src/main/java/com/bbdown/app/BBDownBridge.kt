@@ -591,7 +591,9 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
                 val j = JSONObject()
                 j.put("code", result.code)
                 j.put("message", result.message)
-                if (result.code == 0 && result.cookie.isNotEmpty()) {
+                // 判据必须含 SESSDATA：crossDomain 失败回退的 ticket=xxx 不是有效登录态，
+                // 写入后会把界面置为"已登录"但所有接口 401（幻觉登录）
+                if (result.code == 0 && result.cookie.contains("SESSDATA=")) {
                     Http.cookie = result.cookie
                     TaskManager.setCookie(result.cookie)
                     val editor = prefs.edit()
@@ -617,6 +619,11 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
                         j.put("isVip", isVip)
                         j.put("face", face)
                     } catch (_: Exception) {}
+                } else if (result.code == 0) {
+                    // 扫码被确认但没拿到 SESSDATA（crossDomain 失败）：明确报错让用户重扫，别假装成功
+                    j.put("isLogin", false)
+                    j.put("message", "登录凭证获取失败，请重新扫码")
+                    j.put("code", -1)
                 } else {
                     j.put("isLogin", false)
                 }
@@ -1841,16 +1848,19 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
                     return@execute
                 }
 
-                // Phase 1: 如果有缓存，立即返回
+                // Phase 1: 如果有非空缓存，立即返回。空数组缓存不算有效缓存 —
+                // 它多是上次登录失效时写入的，若短路返回会把"登录失效"永久伪装成"暂无收藏夹"
                 val cachedStr = prefs.getString("fav_folders_cache", "") ?: ""
                 val cachedMid = prefs.getString("fav_folders_cache_mid", "") ?: ""
                 var hasCache = false
                 if (cachedStr.isNotBlank() && cachedMid == mid) {
                     try {
                         val cachedArr = JSONArray(cachedStr)
-                        ok(reqId, cachedArr)
-                        hasCache = true
-                        Logger.d("Bridge", "收藏夹: 返回缓存数据 (${cachedArr.length()} 个)")
+                        if (cachedArr.length() > 0) {
+                            ok(reqId, cachedArr)
+                            hasCache = true
+                            Logger.d("Bridge", "收藏夹: 返回缓存数据 (${cachedArr.length()} 个)")
+                        }
                     } catch (_: Exception) {
                         hasCache = false
                     }
@@ -2057,7 +2067,8 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
         executor.execute {
             try {
                 Logger.i("Bridge", "获取关注列表: mid=$mid, page=$page, orderType=$orderType, tagId=$tagId")
-                val pageSize = if (page == 1) 20 else 50
+                // 页大小必须恒定：B站偏移是 pn*ps，首页 20、后续 50 会漏掉第 21-50 条
+                val pageSize = 50
                 val (followings, total) = BilibiliApi.getFollowings(mid, page, pageSize, orderType, tagId)
                 val arr = JSONArray()
                 for (u in followings) {
@@ -2157,12 +2168,29 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
     }
 
     /** 允许通过 Bridge 修改的设置键白名单，防止覆盖 cookie 等敏感键 */
+    // 允许前端写入的设置键：必须与 getAllSettings 下发的键一一对应，否则前端改了保存不上
     private val allowedSettingKeys = setOf(
         "output_dir", "threads", "preferCodec", "preferAudio", "downloadMode",
         "skipSubtitle", "skipCover", "skipAi", "skipMux", "downloadDanmaku",
         "videoAscending", "audioAscending", "forceHttp", "batchQn",
-        "delayPerPage", "filePattern", "clearOnExit", "theme", "debug_server", "check_update"
+        "delayPerPage", "filePattern",
+        "filePatternMultiPage", "filePatternCollection", "filePatternCollectionMultiPage",
+        "clearOnExit", "theme", "debug_server", "check_update"
     )
+
+    /**
+     * 可读设置键白名单（getSetting）。cookie / tv_access_token 等凭证绝不能通过桥读出，
+     * 否则 WebView 内任意脚本（含被注入的恶意页面）都能把登录态打包外发。
+     * 直接用 allowedSettingKeys 作为读白名单即可，读写口径一致。
+     */
+    @JavascriptInterface
+    fun getSetting(reqId: Int, key: String) {
+        if (key !in allowedSettingKeys) {
+            err(reqId, "不允许读取此设置: $key")
+            return
+        }
+        ok(reqId, JSONObject().put("value", prefs.getString(key, defaultSetting(key))))
+    }
 
     @JavascriptInterface
     fun setSetting(reqId: Int, key: String, value: String) {
@@ -2196,11 +2224,6 @@ class BBDownBridge(private val context: Context, private val webView: WebView) {
             }
         }
         ok(reqId)
-    }
-
-    @JavascriptInterface
-    fun getSetting(reqId: Int, key: String) {
-        ok(reqId, JSONObject().put("value", prefs.getString(key, defaultSetting(key))))
     }
 
     @JavascriptInterface

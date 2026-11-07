@@ -55,21 +55,24 @@ class MultiThreadDownloader(
             singleThreadDownload(candidates, dest, referer)
             return
         }
-        // 完整文件已存在，跳过
-        if (dest.exists() && dest.length() == total) {
-            progress(total, total, 0)
-            return
-        }
 
         // 断点续传：加载或创建分片配置
         val cfgFile = File(dest.parentFile, dest.name + ".dl")
+        // 没有 .dl 说明上一次是"完整下载并删除了断点文件"的正常收尾，文件可信
+        if (!cfgFile.exists() && dest.exists() && dest.length() == total) {
+            progress(total, total, 0)
+            return
+        }
         val segments = loadResumeConfig(cfgFile, url0, total)
             ?: createSegments(total)
 
-        // 确保文件大小正确
-        val raf = RandomAccessFile(dest, "rw")
-        raf.setLength(total)
-        raf.close()
+        // 写入进度按分片绝对偏移定位（临时变量 threadWritten 与持久化的 seg.downloaded 分离）：
+        // 重试时从 seg.resumeFrom 重发 Range，只累加"本次真正新写入"的字节，
+        // 避免上一 attempt 的字节被重复计入进度、把 seg.downloaded 累加到超过段大小。
+        if (!dest.exists()) {
+            dest.parentFile?.mkdirs()
+            if (!dest.createNewFile()) java.io.IOException("无法创建下载文件: ${dest.absolutePath}")
+        }
 
         val downloaded = AtomicLong(segments.sumOf { it.downloaded })
         val startTime = System.currentTimeMillis()
@@ -80,8 +83,10 @@ class MultiThreadDownloader(
             if (seg.isComplete) continue // 该分片已完成，跳过
             val t = Thread {
                 try {
-                    downloadPart(candidates, dest, seg.resumeFrom, seg.end, referer) { delta ->
-                        seg.downloaded += delta
+                    downloadPart(candidates, dest, seg, referer) { segWritten, _ ->
+                        val delta = segWritten - seg.downloaded
+                        if (delta <= 0) return@downloadPart // 重试已覆盖过的字节，不重复累加
+                        seg.downloaded = segWritten
                         val d = downloaded.addAndGet(delta)
                         val elapsed = (System.currentTimeMillis() - startTime) / 1000.0
                         val spd = if (elapsed > 0) (d / elapsed).toLong() else 0
@@ -137,6 +142,13 @@ class MultiThreadDownloader(
                 throw java.io.IOException("下载失败: ${err.message}", err)
             }
             throw InterruptedException("下载已取消")
+        }
+
+        // 下载完成前必须校验每段完整性：提前 EOF / 意外中断都可能让线程"正常返回"但缺块
+        val incomplete = segments.filter { !it.isComplete }
+        if (incomplete.isNotEmpty()) {
+            saveResumeConfig(cfgFile, url0, total, segments)
+            throw java.io.IOException("下载不完整: ${incomplete.size}/${segments.size} 段缺失，已保留断点文件可重试")
         }
 
         // 下载完成，删除配置文件
@@ -251,15 +263,23 @@ class MultiThreadDownloader(
     }
 
     private fun downloadPart(
-        urls: List<String>, dest: File, start: Long, end: Long,
-        referer: String, onProgress: (Long) -> Unit
+        urls: List<String>, dest: File, seg: Segment,
+        referer: String, onProgress: (segWritten: Long, threadWritten: Long) -> Unit
     ) {
+        // 线程内从 0 累加本次实际写入量，与持久化的 seg.downloaded 分离：
+        // 每个 attempt 都从 seg.resumeFrom 重发 Range，attempt 之间不丢弃已写字节，
+        // 因此重试时以 (seg 进入本函数时的进度 + 本次累计) 作为绝对偏移上报，父层据此只累加净增量。
+        val base = seg.downloaded
+        var threadWritten = 0L
         var lastError: Exception? = null
         // 分片级重试：CDN 偶发提前断连(unexpected end of stream)时自愈；
         // 每次重试轮换主/备用 CDN 节点(urls 已含 http→https 展开)，绕开单节点文件块故障
         val maxAttempts = 3
         for (attempt in 1..maxAttempts) {
             val currentUrl = urls[(attempt - 1) % urls.size]
+            // 本次 attempt 只请求尚未写到的剩余区间
+            val from = seg.start + base + threadWritten
+            if (from > seg.end) return // 段已完整
             var conn: HttpURLConnection? = null
             var raf: RandomAccessFile? = null
             var input: java.io.InputStream? = null
@@ -272,7 +292,7 @@ class MultiThreadDownloader(
                     setRequestProperty("User-Agent", Http.userAgent)
                     setRequestProperty("Referer", referer)
                     if (cookie.isNotEmpty()) setRequestProperty("Cookie", cookie)
-                    setRequestProperty("Range", "bytes=$start-$end")
+                    setRequestProperty("Range", "bytes=$from-${seg.end}")
                     // 重试时禁用 keep-alive：Android HttpURLConnection 复用连接被 CDN 提前关闭会复现 unexpected end of stream
                     if (attempt > 1) setRequestProperty("Connection", "close")
                 }
@@ -288,7 +308,7 @@ class MultiThreadDownloader(
                     throw java.io.IOException("服务器未返回 206 Partial Content(HTTP $code)${if (errBody != null) ": $errBody" else ""}")
                 }
                 raf = RandomAccessFile(dest, "rw")
-                raf.seek(start)
+                raf.seek(from)
                 input = conn.inputStream
                 val buf = ByteArray(64 * 1024)
                 while (true) {
@@ -296,15 +316,22 @@ class MultiThreadDownloader(
                     val n = input.read(buf)
                     if (n < 0) break
                     raf.write(buf, 0, n)
-                    onProgress(n.toLong())
+                    threadWritten += n
+                    onProgress(base + threadWritten, threadWritten)
                 }
+                // 提前 EOF：服务端 206 后断连（read 返回 -1）不能当作成功，必须校验区间完整性
+                val received = base + threadWritten
+                if (received < seg.size) {
+                    throw java.io.IOException("分片未下载完整: ${received}/${seg.size} 字节（连接提前中断）")
+                }
+                try { raf.fd.sync() } catch (_: Exception) {}
                 return  // 下载成功，退出
             } catch (e: Exception) {
                 // 取消/中断时快速退出，不再重试
                 if (canceled) throw InterruptedException("下载已取消")
                 lastError = e
                 if (attempt < maxAttempts) {
-                    Logger.w("MultiThreadDownloader", "分片 $start-$end 第${attempt}次失败(${e.message}) url=${runCatching { URL(currentUrl).host }.getOrNull()}，${(attempt + 1) * 1000}ms后重试")
+                    Logger.w("MultiThreadDownloader", "分片 ${seg.start}-${seg.end} 第${attempt}次失败(${e.message}) url=${runCatching { URL(currentUrl).host }.getOrNull()}，${(attempt + 1) * 1000}ms后重试")
                     try { Thread.sleep(1000L * attempt) } catch (_: InterruptedException) { throw InterruptedException("下载已取消") }
                 }
             } finally {
@@ -315,6 +342,7 @@ class MultiThreadDownloader(
         }
         // 所有候选 URL 均失败，抛出最后一个异常让上层处理
         if (lastError != null) throw lastError
+        if (base + threadWritten < seg.size) throw java.io.IOException("分片下载失败: 不足 ${base + threadWritten}/${seg.size} 字节")
     }
 
     @Suppress("UNUSED_VARIABLE")
@@ -359,6 +387,10 @@ class MultiThreadDownloader(
                         val elapsed = (System.currentTimeMillis() - startTime) / 1000.0
                         val spd = if (elapsed > 0) (downloaded / elapsed).toLong() else 0
                         progress(downloaded, total, spd)
+                    }
+                    // 提前 EOF 校验：服务端声明了长度但实际未收满 → 视为失败并轮换下一个地址
+                    if (total > 0 && downloaded != total) {
+                        throw java.io.IOException("下载不完整: $downloaded/$total 字节（连接提前中断）")
                     }
                 }
                 return  // 下载成功，退出

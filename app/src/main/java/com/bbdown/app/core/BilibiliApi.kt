@@ -34,17 +34,18 @@ object BilibiliApi {
 
     data class LoginResult(val code: Int, val message: String, val cookie: String = "", val refreshCToken: String = "", val accessToken: String = "")
 
-    /** 确保 WBI mixinKey 已加载 */
+    /** 确保 WBI mixinKey 已加载；失败时不缓存空值，下次调用会重试（否则整个进程生命周期都用空 key 签名） */
     fun ensureWbi() {
-        if (mixinKey != null) return
+        if (!mixinKey.isNullOrEmpty()) return
         try {
             val json = JSONObject(Http.get("https://api.bilibili.com/x/web-interface/nav"))
             val wbi = json.getJSONObject("data").getJSONObject("wbi_img")
             val imgKey = Wbi.extractKeyFromUrl(wbi.getString("img_url"))
             val subKey = Wbi.extractKeyFromUrl(wbi.getString("sub_url"))
-            mixinKey = Wbi.getMixinKey(imgKey + subKey)
+            val key = Wbi.getMixinKey(imgKey + subKey)
+            if (key.isNotEmpty()) mixinKey = key else Logger.w("Wbi", "mixinKey 为空，等待下次重试")
         } catch (e: Exception) {
-            mixinKey = ""
+            Logger.w("Wbi", "获取 mixinKey 失败(下次重试): ${e.message}")
         }
     }
 
@@ -57,6 +58,18 @@ object BilibiliApi {
         }
         val wrid = Wbi.sign(sb.toString(), mixinKey ?: "")
         return "$sb&w_rid=$wrid"
+    }
+    /** B站 API 业务错误（code != 0 或 data 缺失）。
+     *  必须上抛到桥接层转成 err(reqId)，绝不能静默返回空列表 —
+     *  否则 -101(未登录)/-352(风控) 会被前端误显示为"暂无数据/下一页没反应"。 */
+    class BiliApiError(val code: Int, message: String) : Exception(message)
+
+    /** data 缺失/为 null 时按响应 code 生成错误（匿名访问部分接口返回 code=0,data=null） */
+    private fun biliDataError(json: JSONObject): BiliApiError {
+        val code = json.optInt("code", 0)
+        val msg = json.optString("message", "")
+        return if (code == 0) BiliApiError(-1, "接口未返回数据(可能网页版登录已失效)")
+               else BiliApiError(code, msg.ifEmpty { "接口错误(code=$code)" })
     }
 
     // ==================== UP主认证信息缓存 ====================
@@ -1101,7 +1114,10 @@ object BilibiliApi {
                 referer = "https://space.bilibili.com/$mid/favlist")
             Logger.d("Fav", "收藏夹响应: ${resp.take(300)}")
             val json = JSONObject(resp)
-            val data = json.optJSONObject("data") ?: return result
+            // 匿名/登录失效时该接口返回 code=0,data=null 或 code=-101，两种都必须上抛，
+            // 否则前端把"登录失效"显示成"暂无收藏夹"
+            if (json.optInt("code", 0) != 0) throw biliDataError(json)
+            val data = json.optJSONObject("data") ?: throw biliDataError(json)
             val list = data.optJSONArray("list") ?: return result
             for (i in 0 until list.length()) {
                 val item = list.getJSONObject(i)
@@ -1112,8 +1128,11 @@ object BilibiliApi {
                     cover = item.optString("cover")
                 ))
             }
+        } catch (e: BiliApiError) {
+            throw e
         } catch (e: Exception) {
             Logger.e("Fav", "获取收藏夹失败: ${e.message}")
+            throw BiliApiError(-2, "网络或解析失败: ${e.message ?: e.javaClass.simpleName}")
         }
         return result
     }
@@ -1131,8 +1150,10 @@ object BilibiliApi {
             )
             Logger.d("Fav", "收藏夹视频响应: ${resp.take(300)}")
             val json = JSONObject(resp)
-            val data = json.optJSONObject("data") ?: return Pair(result, 0)
-            total = data.optInt("info", 0)
+            if (json.optInt("code", 0) != 0) throw biliDataError(json)
+            val data = json.optJSONObject("data") ?: throw biliDataError(json)
+            // info 是对象，总数在 info.media_count（旧写法 optInt("info") 恒0 → 分页恒1页"下一页没反应"）
+            total = data.optJSONObject("info")?.optInt("media_count", 0) ?: 0
             val medias = data.optJSONArray("medias") ?: return Pair(result, total)
             for (i in 0 until medias.length()) {
                 val item = medias.getJSONObject(i)
@@ -1187,8 +1208,11 @@ object BilibiliApi {
                     }
                 }
             }
+        } catch (e: BiliApiError) {
+            throw e
         } catch (e: Exception) {
             Logger.e("Fav", "获取收藏夹视频失败: ${e.message}")
+            throw BiliApiError(-2, "网络或解析失败: ${e.message ?: e.javaClass.simpleName}")
         }
         return Pair(result, total)
     }
@@ -1784,13 +1808,14 @@ object BilibiliApi {
                         continue
                     }
                     Logger.e("Search", "搜索UP主失败：多次重试仍被风控")
-                    return result
+                    throw BiliApiError(412, "搜索被B站风控拦截，请稍后重试")
                 }
                 break
             }
 
             val json = JSONObject(resp)
-            val data = json.optJSONObject("data") ?: return result
+            if (json.optInt("code", 0) != 0) throw biliDataError(json)
+            val data = json.optJSONObject("data") ?: throw biliDataError(json)
             val items = data.optJSONArray("result") ?: return result
             for (i in 0 until items.length()) {
                 val item = items.getJSONObject(i)
@@ -1831,8 +1856,11 @@ object BilibiliApi {
                 cacheAuthInfo(u.mid, u.officialType, u.vipType, u.vipStatus)
             }
             Logger.i("Search", "搜索到 ${result.size} 个UP主")
+        } catch (e: BiliApiError) {
+            throw e
         } catch (e: Exception) {
             Logger.e("Search", "搜索UP主失败: ${e.message}")
+            throw BiliApiError(-2, "网络或解析失败: ${e.message ?: e.javaClass.simpleName}")
         }
         return result
     }
@@ -1859,7 +1887,13 @@ object BilibiliApi {
             val resp = Http.get(apiUrl, referer = "https://space.bilibili.com/$mid/video")
             Logger.d("Search", "UP主视频响应: ${resp.take(300)}")
             val json = JSONObject(resp)
-            val data = json.optJSONObject("data") ?: return Pair(result, 0)
+            // code!=0 必须上抛(-101未登录/-352风控)，否则前端只见空列表误判"无投稿/下一页没反应"
+            val code = json.optInt("code", 0)
+            if (code != 0) {
+                Logger.e("Search", "获取UP主视频接口错误(code=$code): ${json.optString("message")}")
+                throw biliDataError(json)
+            }
+            val data = json.optJSONObject("data") ?: throw biliDataError(json)
 
             // 获取总数
             val pageObj = data.optJSONObject("page")
@@ -1883,8 +1917,11 @@ object BilibiliApi {
                 ))
             }
             Logger.i("Search", "获取UP主(mid=$mid)视频: 第${page}页, ${result.size}个, 共${total}个")
+        } catch (e: BiliApiError) {
+            throw e
         } catch (e: Exception) {
             Logger.e("Search", "获取UP主视频失败: ${e.message}")
+            throw BiliApiError(-2, "网络或解析失败: ${e.message ?: e.javaClass.simpleName}")
         }
         return Pair(result, total)
     }
@@ -1992,9 +2029,9 @@ object BilibiliApi {
                 val json = JSONObject(resp)
                 if (json.optInt("code") != 0) {
                     Logger.e("Follow", "获取关注列表失败: ${json.optString("message")}")
-                    return Pair(result, total)
+                    throw biliDataError(json)
                 }
-                val data = json.optJSONObject("data") ?: return Pair(result, total)
+                val data = json.optJSONObject("data") ?: throw biliDataError(json)
                 total = data.optInt("total", 0)
                 val list = data.optJSONArray("list") ?: return Pair(result, total)
                 for (i in 0 until list.length()) {
@@ -2023,8 +2060,11 @@ object BilibiliApi {
             if (result.isNotEmpty()) {
                 fetchFansBatch(result)
             }
+        } catch (e: BiliApiError) {
+            throw e
         } catch (e: Exception) {
             Logger.e("Follow", "获取关注列表失败: ${e.message}")
+            throw BiliApiError(-2, "网络或解析失败: ${e.message ?: e.javaClass.simpleName}")
         }
         return Pair(result, total)
     }
@@ -2324,8 +2364,11 @@ object BilibiliApi {
                 cacheAuthInfo(v.mid, v.officialType, v.vipType, v.vipStatus)
             }
             Logger.i("Search", "搜索到 ${result.size} 个视频")
+        } catch (e: BiliApiError) {
+            throw e
         } catch (e: Exception) {
             Logger.e("Search", "搜索视频失败: ${e.message}")
+            throw BiliApiError(-2, "网络或解析失败: ${e.message ?: e.javaClass.simpleName}")
         }
         return result
     }

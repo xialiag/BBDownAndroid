@@ -55,7 +55,7 @@ object Http {
                 setRequestProperty("Accept", "*/*")
                 setRequestProperty("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
                 setRequestProperty("Content-Type", contentType)
-                val ck = joinCookie(cookie, extraCookie)
+                val ck = joinCookie(cookie, extraCookie, hostOf(url))
                 if (ck.isNotEmpty()) setRequestProperty("Cookie", ck)
                 if (referer.isNotEmpty()) setRequestProperty("Referer", referer)
                 doOutput = true
@@ -95,7 +95,7 @@ object Http {
                 setRequestProperty("Accept-Encoding", "gzip, deflate")
                 setRequestProperty("Accept", "*/*")
                 setRequestProperty("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-                val ck = joinCookie(cookie, extraCookie)
+                val ck = joinCookie(cookie, extraCookie, hostOf(url))
                 if (ck.isNotEmpty()) setRequestProperty("Cookie", ck)
                 val ref = if (referer.isNotEmpty()) referer else if (url.contains("api.bilibili.com") || url.contains("bilivideo")) "https://www.bilibili.com/" else ""
                 if (ref.isNotEmpty()) setRequestProperty("Referer", ref)
@@ -125,13 +125,37 @@ object Http {
         }
     }
 
-    /** 合并两个 cookie 字符串，用 "; " 分隔，去除空项和尾部分号 */
-    private fun joinCookie(base: String, extra: String): String {
+    /**
+     * 目标 host 是否属于 B 站域（登录 Cookie 只应发给这些域）。
+     * 全局 Http.cookie 是 B站 SESSDATA，曾无条件发往所有 host（含 api.github.com 检查更新），
+     * 属凭证外泄路径，必须按域过滤。
+     */
+    private fun isBiliHost(host: String): Boolean {
+        val h = host.lowercase()
+        return h == "bilibili.com" || h.endsWith(".bilibili.com") ||
+               h == "bilivideo.com" || h.endsWith(".bilivideo.com") ||
+               h == "bilivideo.cn" || h.endsWith(".bilivideo.cn") ||
+               h == "akamaized.net" || h.endsWith(".akamaized.net") ||
+               h == "hdslb.com" || h.endsWith(".hdslb.com") ||
+               h == "biliapi.net" || h.endsWith(".biliapi.net") ||
+               h == "biliapi.com" || h.endsWith(".biliapi.com") ||
+               h == "biligame.com" || h.endsWith(".biligame.com") ||
+               h == "b23.tv" || h == "bili2233.cn"
+    }
+
+    /** 合并两个 cookie 字符串，用 "; " 分隔，去除空项和尾部分号；非 B站域一律不带全局 cookie */
+    private fun joinCookie(base: String, extra: String, host: String = ""): String {
         val parts = mutableListOf<String>()
-        if (base.trim().isNotEmpty()) parts.add(base.trim().trim(';').trim())
+        if (host.isNotEmpty() && isBiliHost(host)) {
+            if (base.trim().isNotEmpty()) parts.add(base.trim().trim(';').trim())
+        }
+        // extraCookie 是调用方显式传入的（如粉丝数接口的专用 cookie），保持原语义
         if (extra.trim().isNotEmpty()) parts.add(extra.trim().trim(';').trim())
         return parts.joinToString("; ")
     }
+
+    /** 取 URL 的 host（解析失败返回空串，此时不发全局 cookie） */
+    private fun hostOf(url: String): String = try { URL(url).host ?: "" } catch (_: Exception) { "" }
 
     /** GET 获取重定向后的最终地址（用于 b23.tv 短链） */
     fun getLocation(url: String): String {
@@ -176,7 +200,7 @@ object Http {
                     setRequestProperty("Accept-Encoding", "gzip, deflate")
                     setRequestProperty("Accept", "*/*")
                     setRequestProperty("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-                    val ck = joinCookie(cookie, extraCookie)
+                    val ck = joinCookie(cookie, extraCookie, hostOf(currentUrl))
                     if (ck.isNotEmpty()) setRequestProperty("Cookie", ck)
                     if (referer.isNotEmpty()) setRequestProperty("Referer", referer)
                 }
