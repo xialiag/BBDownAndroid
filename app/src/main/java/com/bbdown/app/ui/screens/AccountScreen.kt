@@ -336,7 +336,10 @@ private fun FavVideoList(vm: AppViewModel, folder: FavFolderItem) {
             Style.Button("← 返回", { vm.backFromFavFolder() }, kind = Style.Kind.Ghost, fontSize = 11.sp)
             Spacer(Modifier.width(8.dp))
             Text(folder.title, color = c.fgBright, fontSize = 13.sp, fontWeight = FontWeight.Medium,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            // 原版 downloadAllFav：一键下载整个收藏夹
+            Style.Button("下载全部", { vm.downloadAllFav() },
+                kind = Style.Kind.Primary, fontSize = 11.sp)
         }
         when {
             state.loading && state.items.isEmpty() -> LoadingRow("加载收藏夹视频…")

@@ -250,8 +250,25 @@ private fun UpperVideoList(vm: AppViewModel, upper: UpperItem) {
             Text(upper.uname + " 的投稿", color = c.fgBright, fontSize = 13.sp,
                 fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        Text("${state.total} 个投稿", color = c.fgDim, fontSize = 11.sp,
-            modifier = Modifier.padding(bottom = 6.dp))
+        // 选择模式工具条 / 普通提示行（原版 renderUpperVideoList）
+        if (vm.upperSelectMode) {
+            Row(
+                Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text("已选 ${vm.upperSelected.size} 个", color = c.fgDim, fontSize = 12.sp)
+                Spacer(Modifier.weight(1f))
+                Style.Button("全选本页", { vm.selectAllUpper(true) }, fontSize = 11.sp)
+                Style.Button("取消", { vm.selectAllUpper(false) }, fontSize = 11.sp)
+                Style.Button("下载选中", { vm.submitUpperDownload() },
+                    kind = Style.Kind.Primary, fontSize = 11.sp)
+                Style.Button("退出", { vm.toggleUpperSelectMode() }, fontSize = 11.sp)
+            }
+        } else {
+            Text("${state.total} 个投稿 · 长按视频可批量选择", color = c.fgDim, fontSize = 13.sp,
+                modifier = Modifier.padding(bottom = 6.dp))
+        }
 
         when {
             state.loading && state.items.isEmpty() -> LoadingRow("正在加载投稿视频…")
@@ -260,7 +277,16 @@ private fun UpperVideoList(vm: AppViewModel, upper: UpperItem) {
             else -> {
                 LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     itemsIndexed(state.items, key = { _, v -> v.bvid + v.title }) { i, v ->
-                        StaggeredItem(i) { VideoCard(v) { vm.navigateToAddTaskWith(v.bvid) } }
+                        StaggeredItem(i) {
+                            VideoCard(
+                                v,
+                                checked = if (vm.upperSelectMode) vm.upperSelected.contains(v.bvid) else null,
+                                onLongClick = { if (!vm.upperSelectMode) { vm.toggleUpperSelectMode(); vm.toggleUpperItem(v.bvid) } },
+                            ) {
+                                if (vm.upperSelectMode) vm.toggleUpperItem(v.bvid)
+                                else vm.navigateToAddTaskWith(v.bvid)
+                            }
+                        }
                     }
                     item {
                         Spacer(Modifier.height(8.dp))
@@ -304,14 +330,24 @@ internal fun PaginationBar(
 
 /** 视频卡片（投稿/收藏夹/搜索结果共用） */
 @Composable
-internal fun VideoCard(v: VideoItem, onClick: () -> Unit) {
+internal fun VideoCard(
+    v: VideoItem,
+    checked: Boolean? = null,
+    onLongClick: () -> Unit = {},
+    onClick: () -> Unit,
+) {
     val c = AppTheme.colors
     PressableBox(
         onClick = onClick,
+        onLongClick = onLongClick,
         modifier = Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(Spec.VcItem.radius))
             .background(c.cardBg)
-            .border(1.dp, c.cardBorder, RoundedCornerShape(Spec.VcItem.radius))
+            .border(
+                if (checked == true) 2.dp else 1.dp,
+                if (checked == true) c.accent else c.cardBorder,
+                RoundedCornerShape(Spec.VcItem.radius)
+            )
             .padding(Spec.VcItem.padding),
     ) {
         Row {

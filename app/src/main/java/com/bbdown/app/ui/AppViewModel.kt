@@ -805,6 +805,84 @@ class AppViewModel : ViewModel() {
         if (v != "auth") cancelQrLogin()
     }
 
+    // ==================== UP投稿 / 收藏夹 批量选择 ====================
+
+    /** UP投稿列表的选择模式与选中集合（原版 _upperSelMode / _upperSelected） */
+    var upperSelectMode by mutableStateOf(false)
+    val upperSelected = mutableStateListOf<String>()
+
+    fun toggleUpperSelectMode() {
+        upperSelectMode = !upperSelectMode
+        if (!upperSelectMode) upperSelected.clear()
+    }
+
+    fun toggleUpperItem(bvid: String) {
+        if (upperSelected.contains(bvid)) upperSelected.remove(bvid) else upperSelected.add(bvid)
+    }
+
+    fun selectAllUpper(all: Boolean) {
+        upperSelected.clear()
+        if (all) upperSelected.addAll(upperVideos.items.map { it.bvid })
+    }
+
+    /** 下载选中的 UP 投稿（原版 downloadSelectedUpperVideos） */
+    fun submitUpperDownload() = viewModelScope.launch {
+        if (upperSelected.isEmpty()) { toast("请先选择视频", true); return@launch }
+        val targets = upperSelected.toList()
+        withContext(Dispatchers.IO) { targets.forEach { bv -> runCatching { addTaskFromBvid(bv) } } }
+        toast("已加入 ${targets.size} 个任务")
+        upperSelectMode = false
+        upperSelected.clear()
+        navigate(View.Explorer)
+    }
+
+    /** 收藏夹全部下载（原版 downloadAllFav） */
+    fun downloadAllFav() = viewModelScope.launch {
+        val folder = currentFavFolder ?: return@launch
+        val total = favList.total
+        if (total <= 0) { toast("收藏夹为空", true); return@launch }
+        toast("开始下载收藏夹全部 $total 个视频…")
+        var ok = 0
+        withContext(Dispatchers.IO) {
+            var page = 1
+            while (true) {
+                val (items, _) = runCatching { bridgeGetFavList(folder.id, page) }.getOrNull() ?: break
+                if (items.isEmpty()) break
+                items.forEach { v -> runCatching { addTaskFromBvid(v.bvid); ok++ } }
+                if (items.size < 20) break
+                page++
+                if (page > 50) break   // 安全上限
+            }
+        }
+        toast("收藏夹下载：已加入 $ok 个任务")
+        navigate(View.Explorer)
+    }
+
+    /** 由 bvid 建任务入队（内部复用） */
+    private fun addTaskFromBvid(bvid: String) {
+        val resolved = bridgeResolveVideo(bvid)
+        val info = resolved.info
+        if (info.pages.isEmpty()) return
+        TaskManager.add(DownloadTask(
+            taskId = "${System.currentTimeMillis()}_${bvid.hashCode()}",
+            url = resolved.url, title = info.title, pic = info.pic, pages = info.pages,
+            videoId = "", preferCodec = settings["preferCodec"] ?: "avc",
+            preferAudio = settings["preferAudio"] ?: "m4a", cookie = bridgeCookie(),
+            downloadMode = settings["downloadMode"] ?: "all",
+            downloadDanmaku = settings["downloadDanmaku"] == "true",
+            skipMux = settings["skipMux"] == "true",
+            skipSubtitle = settings["skipSubtitle"] == "true",
+            skipCover = settings["skipCover"] == "true",
+            skipAi = settings["skipAi"] != "false",
+            videoAscending = settings["videoAscending"] == "true",
+            audioAscending = settings["audioAscending"] == "true",
+            filePattern = resolveFilePattern(info.pages.size > 1),
+            forceHttp = settings["forceHttp"] == "true",
+            isCheese = info.isCheese, upperName = info.upperName, desc = info.desc,
+            pubTime = info.pubTime, bvid = info.bvid, ownerMid = info.ownerMid,
+        ))
+    }
+
     // ==================== 账号：关注 ====================
 
     fun loadFollowings(page: Int = 1, reset: Boolean = page == 1) = viewModelScope.launch {

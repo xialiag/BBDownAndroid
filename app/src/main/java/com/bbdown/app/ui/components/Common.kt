@@ -18,6 +18,8 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -60,12 +62,14 @@ import com.bbdown.app.ui.theme.Dimens
 import kotlin.math.abs
 
 /** 可点击并带轻微缩放反馈的容器：模拟 CSS 的 :active{transform:scale(.93)} */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun PressableBox(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     pressedScale: Float = 0.96f,
     enabled: Boolean = true,
+    onLongClick: (() -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
@@ -78,11 +82,12 @@ fun PressableBox(
     Box(
         modifier = modifier
             .scale(scale)
-            .clickable(
+            .combinedClickable(
                 interactionSource = interaction,
                 indication = null,
                 enabled = enabled,
                 onClick = onClick,
+                onLongClick = onLongClick,
             )
     ) { content() }
 }
