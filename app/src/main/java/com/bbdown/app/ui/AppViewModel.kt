@@ -107,6 +107,49 @@ class AppViewModel : ViewModel() {
         private set
     var selectedTaskId by mutableStateOf<String?>(null)
     var manageMode by mutableStateOf(false)
+    /** 任务筛选：all / running / done / failed（原版 _taskFilter） */
+    var taskFilter by mutableStateOf("all")
+    /** 管理模式下选中的任务 id */
+    val taskSelected = mutableStateListOf<String>()
+
+    /** 按筛选条件过滤任务 */
+    fun filteredTasks(): List<DownloadTask> = when (taskFilter) {
+        "running" -> tasks.filter { it.isRunning || it.status == DownloadTask.STATUS_PENDING }
+        "done" -> tasks.filter { it.status == DownloadTask.STATUS_DONE }
+        "failed" -> tasks.filter { it.status == DownloadTask.STATUS_FAILED || it.status == DownloadTask.STATUS_CANCELED }
+        else -> tasks
+    }
+
+    fun changeTaskFilter(f: String) { taskFilter = f }
+
+    fun toggleTaskSelect(id: String) {
+        if (taskSelected.contains(id)) taskSelected.remove(id) else taskSelected.add(id)
+        if (taskSelected.isEmpty()) manageMode = false
+    }
+
+    fun toggleSelectAllTasks() {
+        val list = filteredTasks()
+        if (taskSelected.size == list.size) taskSelected.clear() else {
+            taskSelected.clear(); taskSelected.addAll(list.map { it.taskId })
+        }
+    }
+
+    fun pauseSelectedTasks() { taskSelected.toList().forEach { TaskManager.pause(it) } }
+
+    fun resumeOrRetrySelectedTasks() {
+        taskSelected.toList().forEach { id ->
+            TaskManager.get(id)?.let {
+                if (it.status == DownloadTask.STATUS_PAUSED) TaskManager.resumePausedTask(it)
+                else TaskManager.resumeTask(it)
+            }
+        }
+    }
+
+    fun deleteSelectedTasks() {
+        taskSelected.toList().forEach { TaskManager.remove(it) }
+        taskSelected.clear(); manageMode = false
+        toast("已删除选中任务")
+    }
 
     /** 登录态 */
     var webLogin by mutableStateOf(false)
@@ -315,6 +358,8 @@ class AppViewModel : ViewModel() {
                 playInfo = null
                 // 流信息是次要信息，失败不阻断下载（与 WebView 版一致）
                 playInfo = runCatching { withContext(Dispatchers.IO) { bridgeGetPlayInfo(result) } }.getOrNull()
+                // 原版：解析后自动检测合集
+                detectCollection(result.info.bvid.ifEmpty { parts[0] })
                 selectedVideoId = playInfo?.videos?.firstOrNull { it.codecs.contains("avc") }?.id
                     ?: playInfo?.videos?.firstOrNull()?.id ?: ""
                 selectedAudioId = playInfo?.audios?.firstOrNull()?.id ?: ""
@@ -378,6 +423,102 @@ class AppViewModel : ViewModel() {
         addTaskInput = bvid
         navigate(View.AddTask)
         parseAndLoad(bvid)
+    }
+
+    // ==================== 合集下载 ====================
+
+    /** 检测到的合集信息（null=不属于合集） */
+    var collectionInfo by mutableStateOf<CollectionInfo?>(null)
+    /** 合集内视频列表 */
+    var collectionVideos by mutableStateOf<List<VideoItem>>(emptyList())
+    /** 合集内选中的 bvid */
+    val collectionSelected = mutableStateListOf<String>()
+    var collectionLoading by mutableStateOf(false)
+
+    /** 检测当前解析的视频是否属于合集/系列（原版 checkCollection） */
+    private suspend fun detectCollection(bvid: String) {
+        if (bvid.isEmpty()) return
+        collectionLoading = true
+        try {
+            val col = withContext(Dispatchers.IO) { bridgeCheckCollection(bvid) }
+            if (col == null || col.bvidList.isEmpty()) {
+                collectionInfo = null
+                collectionVideos = emptyList()
+            } else {
+                collectionInfo = col
+                // 逐个取元数据（标题/封面），失败则用 bvid 占位
+                val metas = withContext(Dispatchers.IO) {
+                    col.bvidList.chunked(4).flatMap { chunk ->
+                        coroutineScope {
+                            chunk.map { bv ->
+                                async {
+                                    runCatching { bridgeResolveVideo(bv) }.getOrNull()
+                                        ?.let { VideoItem(bvid = it.info.bvid.ifEmpty { bv }, title = it.info.title, pic = it.info.pic, ownerName = it.info.upperName, ownerMid = it.info.ownerMid) }
+                                        ?: VideoItem(bvid = bv, title = bv)
+                                }
+                            }.awaitAll()
+                        }
+                    }
+                }
+                collectionVideos = metas
+                collectionSelected.clear()
+                collectionSelected.addAll(metas.map { it.bvid })
+            }
+        } catch (_: Exception) {
+            collectionInfo = null
+        } finally {
+            collectionLoading = false
+        }
+    }
+
+    fun toggleCollectionItem(bvid: String) {
+        if (collectionSelected.contains(bvid)) collectionSelected.remove(bvid) else collectionSelected.add(bvid)
+    }
+
+    fun selectAllCollection(all: Boolean) {
+        collectionSelected.clear()
+        if (all) collectionSelected.addAll(collectionVideos.map { it.bvid })
+    }
+
+    /** 下载选中的合集视频（原版 downloadSelectedCollection） */
+    fun submitCollectionDownload() = viewModelScope.launch {
+        val col = collectionInfo ?: return@launch
+        val targets = collectionVideos.filter { collectionSelected.contains(it.bvid) }
+        if (targets.isEmpty()) { toast("请至少选择一个视频", true); return@launch }
+        var ok = 0; var fail = 0
+        withContext(Dispatchers.IO) {
+            targets.forEachIndexed { idx, item ->
+                try {
+                    val resolved = bridgeResolveVideo(item.bvid)
+                    val info = resolved.info
+                    if (info.pages.isEmpty()) { fail++; return@forEachIndexed }
+                    TaskManager.add(DownloadTask(
+                        taskId = "${System.currentTimeMillis()}_$idx",
+                        url = resolved.url, title = info.title, pic = info.pic, pages = info.pages,
+                        videoId = "", preferCodec = settings["preferCodec"] ?: "avc",
+                        preferAudio = settings["preferAudio"] ?: "m4a", cookie = bridgeCookie(),
+                        downloadMode = settings["downloadMode"] ?: "all",
+                        downloadDanmaku = settings["downloadDanmaku"] == "true",
+                        skipMux = settings["skipMux"] == "true",
+                        skipSubtitle = settings["skipSubtitle"] == "true",
+                        skipCover = settings["skipCover"] == "true",
+                        skipAi = settings["skipAi"] != "false",
+                        videoAscending = settings["videoAscending"] == "true",
+                        audioAscending = settings["audioAscending"] == "true",
+                        filePattern = settings["filePatternCollection"] ?: "",
+                        forceHttp = settings["forceHttp"] == "true",
+                        isCheese = info.isCheese, upperName = info.upperName, desc = info.desc,
+                        pubTime = info.pubTime, bvid = info.bvid, ownerMid = info.ownerMid,
+                        collectionTitle = col.title, collectionIndex = idx + 1,
+                    ))
+                    ok++
+                } catch (_: Exception) { fail++ }
+            }
+        }
+        toast("已加入 $ok 个合集任务${if (fail > 0) "，$fail 个失败" else ""}")
+        collectionInfo = null; collectionVideos = emptyList(); collectionSelected.clear()
+        clearAddTaskState(); addTaskInput = ""
+        navigate(View.Explorer)
     }
 
     /** 批量下载：为每个解析成功的视频创建任务（原版 doBatchDownload） */

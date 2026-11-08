@@ -101,19 +101,66 @@ fun ExplorerScreen(vm: AppViewModel) {
 
 @Composable
 private fun TaskList(vm: AppViewModel) {
+    val c = AppTheme.colors
     val tasks = vm.tasks
     if (tasks.isEmpty()) {
         EmptyHero()
         return
     }
-    // .sb-items.main-task-list：卡片列表，左右各 4dp 外边距（.task-item margin:0 4px）
-    LazyColumn(
-        Modifier.fillMaxSize().padding(horizontal = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-        contentPadding = PaddingValues(vertical = 6.dp),
-    ) {
-        itemsIndexed(tasks, key = { _, t -> t.taskId }) { idx, t ->
-            TaskCard(t, idx + 1) { vm.selectedTaskId = t.taskId }
+    val filtered = vm.filteredTasks()
+    Column(Modifier.fillMaxSize()) {
+        // .task-filter-tabs：全部 / 进行中 / 已完成 / 失败（带计数）
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            val counts = mapOf(
+                "all" to tasks.size,
+                "running" to tasks.count { it.isRunning || it.status == DownloadTask.STATUS_PENDING },
+                "done" to tasks.count { it.status == DownloadTask.STATUS_DONE },
+                "failed" to tasks.count { it.status == DownloadTask.STATUS_FAILED || it.status == DownloadTask.STATUS_CANCELED },
+            )
+            listOf("all" to "全部", "running" to "进行中", "done" to "已完成", "failed" to "失败").forEach { (k, label) ->
+                val active = vm.taskFilter == k
+                val n = counts[k] ?: 0
+                Row(
+                    Modifier.clip(RoundedCornerShape(8.dp))
+                        .background(if (active) c.accent.copy(alpha = 0.15f) else Color.Transparent)
+                        .clickable { vm.changeTaskFilter(k) }
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(label, color = if (active) c.accent else c.fgDim, fontSize = 12.sp,
+                        fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal)
+                    if (n > 0) {
+                        Text("$n", color = if (active) c.accent else c.fgDim, fontSize = 10.sp,
+                            modifier = Modifier.padding(start = 3.dp))
+                    }
+                }
+            }
+        }
+
+        if (filtered.isEmpty()) {
+            Box(Modifier.fillMaxSize().padding(30.dp), contentAlignment = Alignment.TopCenter) {
+                Text("该分类下暂无任务", color = c.fgDim, fontSize = 12.sp)
+            }
+        } else {
+            // .sb-items.main-task-list：卡片列表（.task-item margin:0 4px）
+            LazyColumn(
+                Modifier.fillMaxSize().padding(horizontal = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                contentPadding = PaddingValues(vertical = 6.dp),
+            ) {
+                itemsIndexed(filtered, key = { _, t -> t.taskId }) { idx, t ->
+                    TaskCard(
+                        t, idx + 1,
+                        manageMode = vm.manageMode,
+                        selected = vm.taskSelected.contains(t.taskId),
+                    ) {
+                        if (vm.manageMode) vm.toggleTaskSelect(t.taskId) else vm.selectedTaskId = t.taskId
+                    }
+                }
+            }
         }
     }
 }
@@ -132,7 +179,13 @@ private fun TaskList(vm: AppViewModel) {
  *   .ti-sub{ font-size:11px; color:rgba(255,255,255,.85); margin-top:4px }
  */
 @Composable
-private fun TaskCard(t: DownloadTask, index: Int, onClick: () -> Unit) {
+private fun TaskCard(
+    t: DownloadTask,
+    index: Int,
+    manageMode: Boolean = false,
+    selected: Boolean = false,
+    onClick: () -> Unit,
+) {
     val c = AppTheme.colors
     val hasCover = t.pic.isNotEmpty()
     val pct = (t.progress.coerceIn(0f, 1f) * 100).roundToInt()
@@ -149,8 +202,22 @@ private fun TaskCard(t: DownloadTask, index: Int, onClick: () -> Unit) {
                 if (hasCover) Modifier
                 else Modifier.background(c.cardBg).border(1.dp, c.cardBorder, RoundedCornerShape(12.dp))
             )
+            .then(
+                if (manageMode && selected) Modifier.border(2.dp, c.accent, RoundedCornerShape(12.dp))
+                else Modifier
+            )
             .clickable { onClick() },
     ) {
+        // .ti-check：管理模式下的圆形勾选框
+        if (manageMode) {
+            Box(
+                Modifier.align(Alignment.CenterStart).padding(start = 10.dp).size(20.dp)
+                    .clip(RoundedCornerShape(percent = 50))
+                    .background(if (selected) c.accent else Color.Black.copy(alpha = 0.35f))
+                    .border(2.dp, if (selected) c.accent else Color.White.copy(alpha = 0.6f), RoundedCornerShape(percent = 50)),
+                contentAlignment = Alignment.Center,
+            ) { if (selected) Text("✓", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
+        }
         // .ti-bg：封面铺满作背景
         if (hasCover) {
             AsyncImage(
@@ -193,7 +260,7 @@ private fun TaskCard(t: DownloadTask, index: Int, onClick: () -> Unit) {
         }
 
         // 内容层
-        Box(Modifier.matchParentSize().padding(14.dp)) {
+        Box(Modifier.matchParentSize().padding(if (manageMode) androidx.compose.foundation.layout.PaddingValues(start = 40.dp, top = 14.dp, end = 14.dp, bottom = 14.dp) else androidx.compose.foundation.layout.PaddingValues(14.dp))) {
             // .ti-index 左上 #序号
             Text(
                 "#$index",

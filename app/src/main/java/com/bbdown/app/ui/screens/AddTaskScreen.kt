@@ -6,6 +6,8 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -79,6 +81,7 @@ fun AddTaskScreen(vm: AppViewModel) {
     val c = AppTheme.colors
     var keyword by remember { mutableStateOf(vm.addTaskInput) }
     var advanced by remember { mutableStateOf(false) }
+    var showCollection by remember { mutableStateOf(false) }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).page(),
@@ -168,6 +171,28 @@ fun AddTaskScreen(vm: AppViewModel) {
                                 Text(info.upperName, color = c.fgDim, fontSize = 11.sp)
                             }
                         }
+                    }
+
+                    // 合集横幅（原版 .collection-banner：检测到合集时显示入口）
+                    vm.collectionInfo?.let { col ->
+                        Row(
+                            Modifier.fillMaxWidth().padding(top = 12.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(c.accent.copy(alpha = 0.12f))
+                                .border(1.dp, c.accent.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text("合集：${col.title}", color = c.fgBright, fontSize = 13.sp,
+                                    fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text("共 ${vm.collectionVideos.size} 个视频", color = c.fgDim, fontSize = 11.sp,
+                                    modifier = Modifier.padding(top = 2.dp))
+                            }
+                            Style.Button("下载整个合集", { showCollection = true },
+                                kind = Style.Kind.Primary, fontSize = 12.sp)
+                        }
+                        Spacer(Modifier.height(12.dp))
                     }
 
                     // 分P 选择
@@ -345,6 +370,46 @@ fun AddTaskScreen(vm: AppViewModel) {
                 )
             }
             Spacer(Modifier.height(16.dp))
+        }
+
+        // 合集选择面板（原版 renderCollectionSelection）
+        if (showCollection && vm.collectionInfo != null) {
+            Spacer(Modifier.height(16.dp))
+            Style.H2("选择合集视频")
+            Text("合集：${vm.collectionInfo?.title} · 共 ${vm.collectionVideos.size} 个视频",
+                color = c.fgDim, fontSize = 13.sp, modifier = Modifier.padding(bottom = 8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Style.Button("全选", { vm.selectAllCollection(true) }, fontSize = 11.sp)
+                Style.Button("取消全选", { vm.selectAllCollection(false) }, fontSize = 11.sp)
+                Spacer(Modifier.weight(1f))
+                Text("${vm.collectionSelected.size}/${vm.collectionVideos.size} 已选",
+                    color = c.fgDim, fontSize = 11.sp)
+            }
+            Spacer(Modifier.height(8.dp))
+            vm.collectionVideos.forEachIndexed { i, v ->
+                val sel = vm.collectionSelected.contains(v.bvid)
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 2.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (sel) c.bgActive else c.bgInput)
+                        .clickable { vm.toggleCollectionItem(v.bvid) }
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        Modifier.size(14.dp).clip(RoundedCornerShape(4.dp))
+                            .background(if (sel) c.accent else c.pillBg)
+                            .border(1.dp, if (sel) c.accent else c.pillBorder, RoundedCornerShape(4.dp)),
+                        contentAlignment = Alignment.Center,
+                    ) { if (sel) Text("✓", color = Color.White, fontSize = 10.sp) }
+                    Spacer(Modifier.width(8.dp))
+                    Text("${i + 1}. ${v.title}", color = c.fg, fontSize = 12.sp,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            Style.Button("下载选中视频 (${vm.collectionSelected.size})",
+                { vm.submitCollectionDownload() }, kind = Style.Kind.Primary, fill = true, fontSize = 14.sp)
         }
 
         Spacer(Modifier.height(24.dp))
