@@ -32,7 +32,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.foundation.clickable
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -71,8 +75,8 @@ fun SettingsScreen(
     val c = AppTheme.colors
     var showDebug by remember { mutableStateOf(false) }
     var showCrash by remember { mutableStateOf(false) }
-    // 输入框草稿：初始为空（原版不预填实际路径，避免路径过长占满）
-    var outDirDraft by remember { mutableStateOf("") }
+    // 原版 input value="${s.output_dir||''}" —— 预填实际路径
+    var outDirDraft by remember { mutableStateOf(vm.settings["output_dir"] ?: "") }
 
     LaunchedEffect(showDebug) {
         if (showDebug) vm.loadDebugLogs()
@@ -84,20 +88,53 @@ fun SettingsScreen(
         Style.H1("设置")
 
         // ---------- 主题模式（原版 3 段：深色/浅色/跟随系统）----------
-        // 原版：主题模式是带副标题的区块标题
-        Text("主题模式", color = c.fgBright, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-        Text("切换深色/浅色外观", color = c.fgDim, fontSize = 11.5.sp, modifier = Modifier.padding(top = 2.dp, bottom = 8.dp))
-        Style.SegmentedTabs(
-            options = listOf("深色", "浅色", "跟随系统"),
-            selected = when (vm.settings["theme"]) { "light" -> 1; "system" -> 2; else -> 0 },
-            onSelect = { vm.saveSetting("theme", listOf("dark", "light", "system")[it]) },
-        )
+        // .theme-toggle{ display:flex; align-items:center; justify-content:space-between;
+        //                padding:12px 0; border-bottom:1px solid border-light; margin-bottom:8px }
+        Row(
+            Modifier.fillMaxWidth()
+                .drawBehind {
+                    val t = 1.dp.toPx()
+                    drawLine(c.borderLight, Offset(0f, size.height - t / 2), Offset(size.width, size.height - t / 2), t)
+                }
+                .padding(vertical = 12.dp, horizontal = 0.dp)
+                .padding(bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("主题模式", color = c.fg, fontSize = 13.sp)          // .tt-label
+                Text("切换深色/浅色外观", color = c.fgDim, fontSize = 11.sp,  // .tt-desc
+                    modifier = Modifier.padding(top = 2.dp))
+            }
+            // .theme-switch{ gap:4px; background:pill-bg; border:1px solid pill-border; radius:10px; padding:3px }
+            val themes = listOf("dark" to "深色", "light" to "浅色", "system" to "跟随系统")
+            val cur = vm.settings["theme"] ?: "dark"
+            Row(
+                Modifier.clip(RoundedCornerShape(10.dp)).background(c.pillBg)
+                    .border(1.dp, c.pillBorder, RoundedCornerShape(10.dp))
+                    .padding(3.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                themes.forEach { (v, label) ->
+                    val active = cur == v
+                    Text(
+                        label,
+                        color = if (active) Color.White else c.fgDim,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (active) c.accentBtn else Color.Transparent)
+                            .clickable { vm.saveSetting("theme", v) }
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                    )
+                }
+            }
+        }
 
         // ---------- 下载目录（输入框 + 检查权限）----------
         FieldLabel("下载目录")
-        // 原版：输入框默认空，仅显示占位；改动后才写回设置
         Style.Input(value = outDirDraft, onValueChange = { outDirDraft = it; vm.saveSetting("output_dir", it) },
-            placeholder = "应用私有目录（默认）")
+            placeholder = "应用私有目录")
         Spacer(Modifier.height(6.dp))
         Text(
             "默认使用应用私有存储（无需权限）。如需保存到公共目录（如 Movies），需授予「所有文件访问权限」",

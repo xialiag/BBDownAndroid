@@ -227,46 +227,64 @@ fun AccountScreen(vm: AppViewModel) {
     }
 }
 
+/**
+ * 关注项。CSS：
+ *   .upper-item{ gap:10px; padding:8px 10px; border:1px solid card-border; radius:10px }
+ *   .upper-sign{ font-size:11px; color:fg-dim; flex:1 }
+ *   .upper-fans{ font-size:10.5px; color:fg-title }
+ *   .upper-arrow{ opacity:.4; color:fg-dim }   // 右侧 › 箭头
+ *   .vip-name{ color:#FB7299 }                  // 大会员粉色名字
+ *   .special-star{ color:#FFB027; font-size:11px; margin-left:2px }
+ */
 @Composable
 private fun FollowItem(u: UpperItem, onClick: () -> Unit) {
     val c = AppTheme.colors
+    val isVip = u.vipType > 0 && u.vipStatus == 1
     PressableBox(
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
+        modifier = Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(Spec.UpperItem.radius))
-            .background(c.cardBg).padding(horizontal = Spec.UpperItem.padH, vertical = Spec.UpperItem.padV),
+            .background(c.cardBg)
+            .border(1.dp, c.cardBorder, RoundedCornerShape(Spec.UpperItem.radius))
+            .padding(horizontal = Spec.UpperItem.padH, vertical = Spec.UpperItem.padV),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Avatar(u.face, u.uname, 34.dp)
+            Avatar(u.face, u.uname, 32.dp)
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(u.uname, color = c.fg, fontSize = 12.5.sp, maxLines = 1,
-                        overflow = TextOverflow.Ellipsis)
+                    Text(
+                        u.uname,
+                        color = if (isVip) Color(0xFFFB7299) else c.fg,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
                     if (u.special == 1) {
-                        Spacer(Modifier.width(4.dp))
-                        Text("★", color = c.warn, fontSize = 10.sp)
+                        Text("★", color = Color(0xFFFFB027), fontSize = 11.sp,
+                            modifier = Modifier.padding(start = 2.dp))
                     }
                 }
-                if (u.sign.isNotEmpty()) {
-                    Text(u.sign, color = c.fgDim, fontSize = 10.sp, maxLines = 1,
-                        overflow = TextOverflow.Ellipsis)
+                Row(Modifier.fillMaxWidth().padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        u.sign.ifEmpty { "" },
+                        color = c.fgDim, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (u.fans > 0) {
+                        Text("${fmtCount(u.fans)}粉", color = c.fgTitle, fontSize = 10.5.sp,
+                            modifier = Modifier.padding(start = 6.dp))
+                    }
                 }
             }
-            if (u.fans > 0) {
-                Text(fmtCount(u.fans) + "粉", color = c.fgDim, fontSize = 10.sp)
-            }
+            // 右侧 › 箭头（opacity .4）
+            Text("›", color = c.fgDim.copy(alpha = 0.4f), fontSize = 16.sp,
+                modifier = Modifier.padding(start = 4.dp))
         }
     }
 }
 
-/**
- * 收藏夹卡片。CSS：
- *   .fav-folder-card{ display:flex; align-items:center; gap:8px; padding:10px;
- *                     border:1px solid var(--card-border); border-radius:10px; background:var(--card-bg) }
- *   .ff-icon{ width:28px; height:28px; border-radius:8px; background:var(--accent-btn) }
- *   .ff-title{ font-size:12.5px }  .ff-count{ font-size:10.5px; color:fg-dim }
- */
 @Composable
 private fun FavFolderCard(f: FavFolderItem, onClick: () -> Unit) {
     val c = AppTheme.colors
