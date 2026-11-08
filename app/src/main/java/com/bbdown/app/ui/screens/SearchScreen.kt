@@ -28,6 +28,8 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material3.Icon
+import com.bbdown.app.ui.icons.BBIcons
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -48,14 +50,14 @@ import coil.compose.AsyncImage
 import com.bbdown.app.ui.AppViewModel
 import com.bbdown.app.ui.UpperItem
 import com.bbdown.app.ui.VideoItem
-import com.bbdown.app.ui.components.AppButton
-import com.bbdown.app.ui.components.ButtonKind
 import com.bbdown.app.ui.components.EmptyState
 import com.bbdown.app.ui.components.ErrorRow
 import com.bbdown.app.ui.components.LoadingRow
 import com.bbdown.app.ui.components.Pill
 import com.bbdown.app.ui.components.PressableBox
 import com.bbdown.app.ui.components.StaggeredItem
+import com.bbdown.app.ui.style.Style
+import com.bbdown.app.ui.style.page
 import com.bbdown.app.ui.theme.AppTheme
 import com.bbdown.app.ui.theme.Spec
 import com.bbdown.app.ui.theme.Dimens
@@ -88,45 +90,56 @@ fun SearchScreen(vm: AppViewModel) {
         if (inUpper) {
             vm.currentUpper?.let { UpperVideoList(vm, it) }
         } else {
-            Column(Modifier.fillMaxSize().padding(horizontal = Dimens.screenPadding)) {
-                Text("搜索", color = c.fgBright, fontSize = 18.sp, fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(top = 14.dp))
-                Text("搜索B站UP主或视频，支持直接下载", color = c.fgDim, fontSize = 11.5.sp,
-                    modifier = Modifier.padding(top = 3.dp, bottom = 10.dp))
+            Column(Modifier.fillMaxSize().page()) {
+                Style.H1("搜索")
+                // 原版：未登录时显示引导（.detail-empty 空状态 + 去登录按钮）
+                if (!vm.webLogin && !vm.tvLogin) {
+                    Column(
+                        Modifier.fillMaxWidth().padding(top = 60.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Icon(
+                            BBIcons.Account, contentDescription = null,
+                            tint = c.fgDim.copy(alpha = 0.4f),
+                            modifier = Modifier.size(48.dp),
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        Text("搜索功能需要登录B站账号", color = c.fg, fontSize = 14.sp)
+                        Spacer(Modifier.height(4.dp))
+                        Text("登录后可搜索UP主和视频，并直接下载", color = c.fgDim, fontSize = 12.sp)
+                        Spacer(Modifier.height(16.dp))
+                        Style.Button("去登录", { vm.navigate(com.bbdown.app.ui.View.Account) },
+                            kind = Style.Kind.Primary)
+                    }
+                    return@Column
+                }
+                Style.Lead("搜索B站UP主或视频，支持直接下载")
 
-                // 模式切换
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Pill("UP主", vm.searchMode == 0, { vm.changeSearchMode(0) })
-                    Pill("视频", vm.searchMode == 1, { vm.changeSearchMode(1) })
+                // .search-type-tabs：整体容器 + 内部按钮（选中项 accent 底白字）
+                Style.SegmentedTabs(
+                    options = listOf("UP主", "视频"),
+                    selected = vm.searchMode,
+                    onSelect = { vm.changeSearchMode(it) },
+                )
+
+                // 输入行：input + 「搜索」按钮等高
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Style.Input(
+                        value = keyword,
+                        onValueChange = { keyword = it },
+                        modifier = Modifier.weight(1f),
+                        placeholder = if (vm.searchMode == 0) "输入UP主名称…" else "输入视频关键词…",
+                        height = 44.dp,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Style.Button(
+                        "搜索", { vm.search(keyword) },
+                        kind = Style.Kind.Primary,
+                        enabled = !vm.searchLoading,
+                        height = 44.dp,
+                    )
                 }
                 Spacer(Modifier.height(10.dp))
-
-                // 输入行
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        Modifier.weight(1f).height(44.dp)
-                            .clip(RoundedCornerShape(Dimens.radiusMd))
-                            .background(c.bgInput)
-                            .border(1.dp, c.borderLight, RoundedCornerShape(Dimens.radiusMd))
-                            .padding(horizontal = 12.dp),
-                        contentAlignment = Alignment.CenterStart,
-                    ) {
-                        if (keyword.isEmpty()) {
-                            Text(if (vm.searchMode == 0) "输入UP主名称…" else "输入视频关键词…",
-                                color = c.fgDim, fontSize = 12.sp)
-                        }
-                        BasicTextField(
-                            value = keyword,
-                            onValueChange = { keyword = it },
-                            singleLine = true,
-                            textStyle = TextStyle(color = c.fg, fontSize = 12.5.sp),
-                            cursorBrush = SolidColor(c.accent),
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    AppButton("搜索", { vm.search(keyword) }, kind = ButtonKind.Primary, enabled = !vm.searchLoading)
-                }
 
                 Spacer(Modifier.height(8.dp))
                 AnimatedVisibility(visible = vm.searchLoading, enter = fadeIn(tween(150)), exit = fadeOut(tween(120))) {
@@ -229,10 +242,10 @@ private fun VideoResultList(vm: AppViewModel) {
 private fun UpperVideoList(vm: AppViewModel, upper: UpperItem) {
     val c = AppTheme.colors
     val state = vm.upperVideos
-    Column(Modifier.fillMaxSize().padding(horizontal = Dimens.screenPadding)) {
+    Column(Modifier.fillMaxSize().page()) {
         // 顶部返回栏
         Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            AppButton("← 返回", { vm.backFromUpper() }, kind = ButtonKind.Ghost, fontSize = 11)
+            Style.Button("← 返回", { vm.backFromUpper() }, kind = Style.Kind.Ghost, fontSize = 11.sp)
             Spacer(Modifier.width(8.dp))
             Text(upper.uname + " 的投稿", color = c.fgBright, fontSize = 13.sp,
                 fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -276,16 +289,16 @@ internal fun PaginationBar(
     onNext: () -> Unit,
 ) {
     val c = AppTheme.colors
+    // CSS .fav-pagination{ gap:10px; margin-top:14px; justify-content:center }
+    //     .page-info{ font-size:12px; color:var(--fg-dim) }
     Row(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.Center,
+        Modifier.fillMaxWidth().padding(top = 14.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (page > 1) AppButton("上一页", onPrev, fontSize = 11, enabled = !loading)
-        Spacer(Modifier.width(10.dp))
-        Text("第 $page / $totalPages 页", color = c.fgDim, fontSize = 11.5.sp)
-        Spacer(Modifier.width(10.dp))
-        if (page < totalPages) AppButton("下一页", onNext, fontSize = 11, enabled = !loading)
+        if (page > 1) Style.Button("上一页", onPrev, fontSize = 12.sp, enabled = !loading)
+        Text("第 $page / $totalPages 页", color = c.fgDim, fontSize = 12.sp)
+        if (page < totalPages) Style.Button("下一页", onNext, fontSize = 12.sp, enabled = !loading)
     }
 }
 

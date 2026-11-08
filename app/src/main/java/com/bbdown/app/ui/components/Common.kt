@@ -54,6 +54,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.bbdown.app.ui.style.Style
 import com.bbdown.app.ui.theme.AppTheme
 import com.bbdown.app.ui.theme.Dimens
 import kotlin.math.abs
@@ -84,39 +85,6 @@ fun PressableBox(
                 onClick = onClick,
             )
     ) { content() }
-}
-
-/** 主按钮：对应 .btn / .btn-primary / .btn-sec / .btn-danger */
-enum class ButtonKind { Primary, Secondary, Danger, Ghost }
-
-@Composable
-fun AppButton(
-    text: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    kind: ButtonKind = ButtonKind.Secondary,
-    enabled: Boolean = true,
-    fontSize: Int = 13,
-) {
-    val c = AppTheme.colors
-    val (bg, fg, borderColor) = when (kind) {
-        ButtonKind.Primary -> Triple(c.accentBtn, Color.White, c.accentBtn)
-        ButtonKind.Secondary -> Triple(Color.Transparent, c.fg, c.borderLight)
-        ButtonKind.Danger -> Triple(Color.Transparent, c.error, c.error)
-        ButtonKind.Ghost -> Triple(Color.Transparent, c.fgDim, Color.Transparent)
-    }
-    PressableBox(
-        onClick = { if (enabled) onClick() },
-        enabled = enabled,
-        modifier = modifier
-            .alpha(if (enabled) 1f else 0.4f)
-            .clip(RoundedCornerShape(Dimens.radiusMd))
-            .background(bg)
-            .border(1.dp, borderColor, RoundedCornerShape(Dimens.radiusMd))
-            .padding(horizontal = 14.dp, vertical = 9.dp),
-    ) {
-        Text(text, color = fg, fontSize = fontSize.sp, fontWeight = FontWeight.Medium)
-    }
 }
 
 /** 胶囊选择项：对应 .pill */
@@ -221,7 +189,7 @@ fun ErrorRow(message: String, onRetry: (() -> Unit)?, modifier: Modifier = Modif
         Text(message, color = c.error, fontSize = 12.sp, modifier = Modifier.weight(1f), maxLines = 3, overflow = TextOverflow.Ellipsis)
         if (onRetry != null) {
             Spacer(Modifier.width(8.dp))
-            AppButton("重试", onRetry, fontSize = 11)
+            Style.Button("重试", onRetry, fontSize = 11.sp)
         }
     }
 }

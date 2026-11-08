@@ -11,6 +11,8 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.with
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,6 +22,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.ui.layout.ContentScale
+import kotlin.math.roundToInt
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
@@ -98,7 +103,11 @@ private val NAV_BOTTOM = listOf(
  */
 @OptIn(ExperimentalAnimationApi::class)
 @Composable
-fun AppRoot(vm: AppViewModel, onRequestAllFilesAccess: () -> Unit = {}) {
+fun AppRoot(
+    vm: AppViewModel,
+    onRequestAllFilesAccess: () -> Unit = {},
+    onRequestBatteryExempt: () -> Unit = {},
+) {
     val c = AppTheme.colors
     // 原版 JS: const narrow = window.innerWidth < 768 → layout-narrow
     val narrow = LocalConfiguration.current.screenWidthDp < Spec.Layout.narrowBreakpoint
@@ -149,7 +158,7 @@ fun AppRoot(vm: AppViewModel, onRequestAllFilesAccess: () -> Unit = {}) {
                                 View.AddTask -> AddTaskScreen(vm)
                                 View.Search -> SearchScreen(vm)
                                 View.Account -> AccountScreen(vm)
-                                View.Settings -> SettingsScreen(vm, onRequestAllFilesAccess)
+                                View.Settings -> SettingsScreen(vm, onRequestAllFilesAccess, onRequestBatteryExempt)
                                 View.Help -> HelpScreen(vm)
                             }
                         }
@@ -254,31 +263,93 @@ private fun ActivityBar(vm: AppViewModel, narrow: Boolean = false, onToggleSideb
 @Composable
 private fun SidebarContent(vm: AppViewModel) {
     val c = AppTheme.colors
-    val tasks = vm.tasks
     Column(Modifier.fillMaxSize()) {
+        // .sidebar-header{ height:35px; padding:0 16px; font-size:11px; font-weight:600;
+        //                  letter-spacing:.6px; text-transform:uppercase; color:var(--fg-title) }
         Row(
-            Modifier.fillMaxWidth().height(Spec.Layout.tabsHeight).padding(horizontal = Spec.Layout.statusbarPadH),
+            Modifier.fillMaxWidth().height(35.dp).padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("任务列表", color = c.fgTitle, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.weight(1f))
-            Text("${tasks.size}", color = c.fgDim, fontSize = 10.5.sp)
+            Text(
+                "任务列表",
+                color = c.fgTitle, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                letterSpacing = 0.6.sp, modifier = Modifier.weight(1f),
+            )
+            Text("${vm.tasks.size}", color = c.fgDim, fontSize = 11.sp)
         }
-        if (tasks.isEmpty()) {
+        // .sidebar-body{ padding:4px 0 } + 任务卡片列表（与原版 explorer 完全相同的卡片）
+        if (vm.tasks.isEmpty()) {
             Box(Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.TopCenter) {
-                Text("暂无下载任务", color = c.fgDim, fontSize = 11.5.sp)
+                Text("暂无下载任务", color = c.fgDim, fontSize = 12.sp)
             }
         } else {
-            androidx.compose.foundation.lazy.LazyColumn {
-                items(tasks.size) { i ->
-                    val t = tasks[i]
-                    SidebarTaskItem(t, selected = vm.selectedTaskId == t.taskId) {
-                        vm.selectedTaskId = t.taskId
-                    }
+            androidx.compose.foundation.lazy.LazyColumn(
+                Modifier.fillMaxSize().padding(vertical = 4.dp, horizontal = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                items(vm.tasks.size) { i ->
+                    val t = vm.tasks[i]
+                    SidebarTaskCard(t, i + 1, vm.selectedTaskId == t.taskId) { vm.selectedTaskId = t.taskId }
                 }
             }
         }
     }
+}
+
+/**
+ * 侧栏任务卡片。与原版 explorer 的任务卡同构（封面背景 + #序号 + 标题 + 状态），
+ * 只是尺寸更紧凑（侧栏 220dp 宽）。
+ */
+@Composable
+private fun SidebarTaskCard(t: DownloadTask, index: Int, selected: Boolean, onClick: () -> Unit) {
+    val c = AppTheme.colors
+    val hasCover = t.pic.isNotEmpty()
+    Box(
+        Modifier.fillMaxWidth().heightIn(min = 72.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .then(
+                if (hasCover) Modifier
+                else Modifier.background(if (selected) c.bgListActive else c.cardBg)
+                    .border(1.dp, c.cardBorder, RoundedCornerShape(12.dp))
+            )
+            .clickable { onClick() },
+    ) {
+        if (hasCover) {
+            coil.compose.AsyncImage(
+                model = com.bbdown.app.ui.screens.normalizePic(t.pic),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.matchParentSize(),
+            )
+            Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.42f)))
+        }
+        Box(Modifier.matchParentSize().padding(10.dp)) {
+            Text("#$index", color = c.accent.copy(alpha = 0.6f), fontSize = 11.sp,
+                fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.TopStart))
+            Column(Modifier.align(Alignment.BottomStart)) {
+                Text(t.title, color = if (hasCover) Color.White else c.fg, fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    statusLabel(t.status) + if (t.isRunning) " · ${(t.progress * 100).roundToInt()}%" else "",
+                    color = if (hasCover) Color.White.copy(alpha = 0.8f) else c.fgDim,
+                    fontSize = 10.sp,
+                )
+            }
+        }
+    }
+}
+
+private fun statusLabel(s: Int): String = when (s) {
+    DownloadTask.STATUS_PENDING -> "等待中"
+    DownloadTask.STATUS_PARSING -> "解析中"
+    DownloadTask.STATUS_DOWNLOADING -> "下载中"
+    DownloadTask.STATUS_MUXING -> "合并中"
+    DownloadTask.STATUS_DONE -> "已完成"
+    DownloadTask.STATUS_FAILED -> "失败"
+    DownloadTask.STATUS_CANCELED -> "已取消"
+    DownloadTask.STATUS_PAUSED -> "已暂停"
+    else -> "未知"
 }
 
 @Composable

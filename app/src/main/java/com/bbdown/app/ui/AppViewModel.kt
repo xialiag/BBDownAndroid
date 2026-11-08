@@ -181,6 +181,12 @@ class AppViewModel : ViewModel() {
         refreshLogin()
         loadAllSettings()
         startPolling()
+        // 权限状态由 Activity 提供（写入探测判定），此处刷新一次
+        storageGranted = (context as? com.bbdown.app.MainActivity)?.hasStorageAccess() ?: false
+    }
+
+    fun refreshStorageGranted(activity: com.bbdown.app.MainActivity) {
+        storageGranted = activity.hasStorageAccess()
     }
 
     // ==================== 导航 ====================
@@ -243,6 +249,9 @@ class AppViewModel : ViewModel() {
 
     /** 请求公共存储写入权（跳系统授权页），返回后由 Activity 重建时重新判定 */
     var needsStorageGrant by mutableStateOf(false)
+
+    /** 是否已获得「所有文件访问」权限（写入探测判定，见 MainActivity.resolveOutputDir） */
+    var storageGranted by mutableStateOf(false)
 
     fun requestStorageAccess() {
         needsStorageGrant = true
@@ -511,6 +520,99 @@ class AppViewModel : ViewModel() {
         }
     }
 
+    // ==================== 账号：登录流程 ====================
+
+    /** 登录页视图：main(未登录/已登录主视图) / auth(扫码) / manage(授权管理) */
+    var loginView by mutableStateOf("main")
+    /** 当前扫码方式：web / tv */
+    var loginMode by mutableStateOf("web")
+    /** 二维码 base64 PNG（已含 data:image/png;base64, 前缀） */
+    var qrImage by mutableStateOf("")
+    /** 二维码状态文字 */
+    var qrStatus by mutableStateOf("等待生成二维码…")
+    var qrLoading by mutableStateOf(false)
+    private var qrPollJob: Job? = null
+    private var currentQrKey = ""
+
+    /** 生成当前方式的二维码并开始轮询 */
+    fun startQrLogin(mode: String) {
+        loginMode = mode
+        qrImage = ""
+        qrStatus = "生成二维码中…"
+        qrLoading = true
+        qrPollJob?.cancel()
+        viewModelScope.launch {
+            try {
+                val info = withContext(Dispatchers.IO) {
+                    if (mode == "web") BilibiliApi.getQrCode() else BilibiliApi.getTvQrCode()
+                }
+                qrImage = if (info.image.startsWith("data:")) info.image else "data:image/png;base64,${info.image}"
+                currentQrKey = if (mode == "web") info.qrcodeKey else info.url
+                qrStatus = "等待扫码…"
+                qrLoading = false
+                pollQr(mode, currentQrKey)
+            } catch (e: Exception) {
+                qrStatus = "二维码生成失败：${e.message}"
+                qrLoading = false
+            }
+        }
+    }
+
+    private fun pollQr(mode: String, key: String) {
+        qrPollJob?.cancel()
+        qrPollJob = viewModelScope.launch {
+            var attempts = 0
+            while (isActive && attempts < 120) {
+                delay(1500)
+                attempts++
+                val r = runCatching {
+                    withContext(Dispatchers.IO) {
+                        if (mode == "web") BilibiliApi.pollQrLogin(key) else BilibiliApi.pollTvLogin(key)
+                    }
+                }.getOrNull() ?: continue
+                when (r.code) {
+                    0 -> {
+                        qrStatus = "登录成功"
+                        saveLoginResult(r, mode)
+                        refreshLogin()
+                        loginView = "main"
+                        toast("登录成功")
+                        return@launch
+                    }
+                    86038 -> { qrStatus = "二维码已过期，请刷新"; return@launch }
+                    86090 -> qrStatus = "已扫码，请在手机上确认"
+                    86101 -> qrStatus = "等待扫码…"
+                }
+            }
+        }
+    }
+
+    private fun saveLoginResult(r: BilibiliApi.LoginResult, mode: String) {
+        // 判据必须含 SESSDATA，否则 ticket 回退会写成"幻觉登录"
+        if (mode == "web" && !r.cookie.contains("SESSDATA=")) {
+            qrStatus = "登录凭证获取失败，请重试"
+            return
+        }
+        bridgeSaveLogin(r.cookie, r.accessToken, mode)
+    }
+
+    fun cancelQrLogin() {
+        qrPollJob?.cancel()
+        qrImage = ""
+        qrStatus = "等待生成二维码…"
+    }
+
+    fun switchLoginMode() {
+        loginView = "main"
+        loginMode = if (loginMode == "web") "tv" else "web"
+        cancelQrLogin()
+    }
+
+    fun changeLoginView(v: String) {
+        loginView = v
+        if (v != "auth") cancelQrLogin()
+    }
+
     // ==================== 账号：关注 ====================
 
     fun loadFollowings(page: Int = 1, reset: Boolean = page == 1) = viewModelScope.launch {
@@ -590,6 +692,16 @@ class AppViewModel : ViewModel() {
     fun clearDebugLogs() = viewModelScope.launch {
         withContext(Dispatchers.IO) { runCatching { bridgeClearDebugLogs() } }
         debugLogs = ""
+    }
+
+    fun clearCrashLogs() = viewModelScope.launch {
+        withContext(Dispatchers.IO) { runCatching { bridgeClearCrashLogs() } }
+        crashLogs = emptyList()
+    }
+
+    fun deleteCrashLog(name: String) = viewModelScope.launch {
+        withContext(Dispatchers.IO) { runCatching { bridgeDeleteCrashLog(name) } }
+        loadCrashLogs()
     }
 
     fun loadCrashLogs() = viewModelScope.launch {

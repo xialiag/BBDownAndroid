@@ -99,12 +99,17 @@ class MainActivity : AppCompatActivity() {
         NativeCrashDetector.init(this)
 
         WindowCompat.setDecorFitsSystemWindows(window, true)
-        window.statusBarColor = Color.parseColor("#FB7299")
+        // 状态栏：原版是深色（与标题栏同色 #2e2e32），不是粉色。
+        // 粉色只用于底部 #statusbar。之前误设粉色导致顶部出现大色块。
+        window.statusBarColor = Color.parseColor("#2e2e32")
         // 导航栏透明并延伸到内容下方（原版 WebView viewport-fit=cover 的效果）
         // 导航栏跟随主题深色（原版 WebView 由页面背景自然延伸）
         window.navigationBarColor = Color.parseColor("#1a1a1e")
         WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightNavigationBars = false
-        WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightStatusBars = false
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            isAppearanceLightStatusBars = false   // 深底白字
+            isAppearanceLightNavigationBars = false
+        }
 
         // 初始化任务管理器上下文
         TaskManager.init(this)
@@ -165,7 +170,11 @@ class MainActivity : AppCompatActivity() {
             }
             BBDownTheme(darkTheme = vm.darkTheme) {
                 Surface(Modifier.fillMaxSize(), color = AppTheme.colors.bg) {
-                    AppRoot(vm, onRequestAllFilesAccess = { openAllFilesAccessSettings() })
+                    AppRoot(
+                        vm,
+                        onRequestAllFilesAccess = { openAllFilesAccessSettings() },
+                        onRequestBatteryExempt = { openBatterySettings() },
+                    )
                 }
             }
         }
@@ -232,6 +241,29 @@ class MainActivity : AppCompatActivity() {
         }
         Logger.w("MainActivity", "输出目录不可写，退回私有目录: $configured -> $privateDir")
         return privateDir.apply { mkdirs() }
+    }
+
+    /** 跳转电池优化白名单设置页 */
+    fun openBatterySettings() {
+        try {
+            startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+        } catch (_: Exception) {
+            try { startActivity(Intent(Settings.ACTION_SETTINGS)) } catch (_: Exception) {}
+        }
+    }
+
+    /** 当前是否有公共存储写入权限（与 resolveOutputDir 用同一判定） */
+    fun hasStorageAccess(): Boolean {
+        val configured = getSharedPreferences("bbdown_settings", Context.MODE_PRIVATE)
+            .getString("output_dir", "/storage/emulated/0/BBDown") ?: return false
+        val dir = File(configured)
+        return try {
+            if (dir.mkdirs() || dir.isDirectory) {
+                val probe = File(dir, ".bbdown_write_test")
+                val ok = probe.createNewFile() || probe.exists()
+                probe.delete(); ok
+            } else false
+        } catch (_: Exception) { false }
     }
 
     /** 跳转系统「所有文件访问」授权页（公共存储写入所需） */

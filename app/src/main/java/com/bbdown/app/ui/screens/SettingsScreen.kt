@@ -36,13 +36,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bbdown.app.ui.AppViewModel
-import com.bbdown.app.ui.components.AppButton
-import com.bbdown.app.ui.components.ButtonKind
 import com.bbdown.app.ui.components.Pill
 import com.bbdown.app.ui.components.SectionTitle
+import com.bbdown.app.ui.style.Style
+import com.bbdown.app.ui.style.page
 import com.bbdown.app.ui.theme.AppTheme
 import com.bbdown.app.ui.theme.Dimens
 
@@ -62,74 +63,114 @@ private val MODE_LABELS = listOf(
  * 动效：展开的调试面板用 expandVertically；开关项用 Pill 颜色插值。
  */
 @Composable
-fun SettingsScreen(vm: AppViewModel, onRequestAllFilesAccess: () -> Unit = {}) {
+fun SettingsScreen(
+    vm: AppViewModel,
+    onRequestAllFilesAccess: () -> Unit = {},
+    onRequestBatteryExempt: () -> Unit = {},
+) {
     val c = AppTheme.colors
     var showDebug by remember { mutableStateOf(false) }
-    var outDir by remember { mutableStateOf(vm.settings["output_dir"] ?: "") }
+    var showCrash by remember { mutableStateOf(false) }
+    // 输入框草稿：初始为空（原版不预填实际路径，避免路径过长占满）
+    var outDirDraft by remember { mutableStateOf("") }
 
     LaunchedEffect(showDebug) {
         if (showDebug) vm.loadDebugLogs()
     }
 
     Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = Dimens.screenPadding),
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
     ) {
-        Text("设置", color = c.fgBright, fontSize = 18.sp, fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(top = 14.dp, bottom = 10.dp))
+        Style.H1("设置")
 
-        // ---------- 下载 ----------
-        SectionTitle("下载")
-        SettingRow("输出目录") {
-            Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        // ---------- 主题模式（原版 3 段：深色/浅色/跟随系统）----------
+        // 原版：主题模式是带副标题的区块标题
+        Text("主题模式", color = c.fgBright, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        Text("切换深色/浅色外观", color = c.fgDim, fontSize = 11.5.sp, modifier = Modifier.padding(top = 2.dp, bottom = 8.dp))
+        Style.SegmentedTabs(
+            options = listOf("深色", "浅色", "跟随系统"),
+            selected = when (vm.settings["theme"]) { "light" -> 1; "system" -> 2; else -> 0 },
+            onSelect = { vm.saveSetting("theme", listOf("dark", "light", "system")[it]) },
+        )
+
+        // ---------- 下载目录（输入框 + 检查权限）----------
+        FieldLabel("下载目录")
+        // 原版：输入框默认空，仅显示占位；改动后才写回设置
+        Style.Input(value = outDirDraft, onValueChange = { outDirDraft = it; vm.saveSetting("output_dir", it) },
+            placeholder = "应用私有目录（默认）")
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "默认使用应用私有存储（无需权限）。如需保存到公共目录（如 Movies），需授予「所有文件访问权限」",
+            color = c.fgDim, fontSize = 11.sp, lineHeight = 15.sp,
+        )
+        Spacer(Modifier.height(10.dp))
+        // 权限行：左侧状态 + 右侧授权按钮（原版 .opt-item 结构）
+        Row(
+            Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .background(c.cardBg).border(1.dp, c.cardBorder, RoundedCornerShape(10.dp))
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("文件访问权限", color = c.fg, fontSize = 13.sp)
                 Text(
-                    "写入公共目录需要「所有文件访问」权限，未授权时自动落到应用私有目录",
-                    color = c.fgDim, fontSize = 10.sp, modifier = Modifier.weight(1f),
+                    if (vm.storageGranted) "已授权，可写入公共目录" else "检查失败（未授权，使用私有目录）",
+                    color = if (vm.storageGranted) c.success else c.error,
+                    fontSize = 11.sp, modifier = Modifier.padding(top = 2.dp),
                 )
-                Spacer(Modifier.width(6.dp))
-                AppButton("授权", onRequestAllFilesAccess, fontSize = 10)
             }
-            BasicTextField(
-                value = outDir,
-                onValueChange = { outDir = it },
-                singleLine = true,
-                textStyle = TextStyle(color = c.fg, fontSize = 11.5.sp),
-                cursorBrush = SolidColor(c.accent),
-                modifier = Modifier.fillMaxWidth()
-                    .clip(RoundedCornerShape(Dimens.radiusSm))
-                    .background(c.bgInput)
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
-            )
-            Spacer(Modifier.height(6.dp))
-            AppButton("保存目录", { vm.saveSetting("output_dir", outDir) }, fontSize = 11)
+            Style.Button("授予权限", onRequestAllFilesAccess, kind = Style.Kind.Secondary, fontSize = 12.sp)
         }
+        Spacer(Modifier.height(10.dp))
+        // 电池优化行（原版 .opt-item）
+        Row(
+            Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .background(c.cardBg).border(1.dp, c.cardBorder, RoundedCornerShape(10.dp))
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("电池优化", color = c.fg, fontSize = 13.sp)
+                Text("已加入白名单，后台下载不被杀", color = c.fgDim, fontSize = 11.sp,
+                    modifier = Modifier.padding(top = 2.dp))
+            }
+            Style.Button("打开设置", onRequestBatteryExempt, kind = Style.Kind.Secondary, fontSize = 12.sp)
+        }
+        Spacer(Modifier.height(14.dp))
 
-        SettingRow("线程数") {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                THREAD_OPTIONS.forEach { n ->
-                    Pill(n, (vm.settings["threads"] ?: "8") == n, { vm.saveSetting("threads", n) })
-                }
-            }
-        }
+        // ---------- 线程数（原版分段控件 4/8/16）----------
+        FieldLabel("线程数")
+        Style.SegmentedTabs(
+            options = listOf("4", "8", "16"),
+            selected = when (vm.settings["threads"]) { "4" -> 0; "16" -> 2; else -> 1 },
+            onSelect = { vm.saveSetting("threads", listOf("4", "8", "16")[it]) },
+        )
 
-        SettingRow("下载内容") {
-            Column {
-                MODE_LABELS.chunked(3).forEach { row ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(bottom = 6.dp)) {
-                        row.forEach { (v, l) ->
-                            Pill(l, (vm.settings["downloadMode"] ?: "all") == v, { vm.saveSetting("downloadMode", v) })
-                        }
-                    }
-                }
-            }
-        }
+        // ---------- 下载内容 ----------
+        FieldLabel("默认模式")
+        Style.SelectBox(
+            options = MODE_LABELS.map { it.second },
+            selectedIndex = MODE_LABELS.indexOfFirst { it.first == (vm.settings["downloadMode"] ?: "all") }.coerceAtLeast(0),
+            onSelect = { vm.saveSetting("downloadMode", MODE_LABELS[it].first) },
+        )
 
-        SettingRow("视频编码") {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf("avc" to "AVC", "hevc" to "HEVC", "av1" to "AV1").forEach { (v, l) ->
-                    Pill(l, (vm.settings["preferCodec"] ?: "avc") == v, { vm.saveSetting("preferCodec", v) })
-                }
-            }
-        }
+        // 批量清晰度（原版下拉：自动 / 固定 8K / 4K / 1080P）
+        FieldLabel("批量清晰度")
+        Style.SelectBox(
+            options = listOf("自动（每视频取最高）", "8K", "4K", "1080P", "720P"),
+            selectedIndex = 0,
+            onSelect = { },
+        )
+
+        // ---------- 编码优先级 ----------
+        FieldLabel("编码优先级")
+        Style.SegmentedTabs(
+            options = listOf("AVC", "HEVC", "AV1"),
+            selected = when (vm.settings["preferCodec"]) { "hevc" -> 1; "av1" -> 2; else -> 0 },
+            onSelect = { vm.saveSetting("preferCodec", listOf("avc", "hevc", "av1")[it]) },
+        )
 
         // ---------- 文件名模板 ----------
         SectionTitle("文件名模板")
@@ -155,35 +196,26 @@ fun SettingsScreen(vm: AppViewModel, onRequestAllFilesAccess: () -> Unit = {}) {
             "forceHttp" to "强制HTTP",
             "check_update" to "检查更新",
         ).forEach { (key, label) ->
-            val on = vm.settings[key] == "true"
-            Row(
-                Modifier.fillMaxWidth().padding(vertical = 7.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(label, color = c.fg, fontSize = 12.5.sp, modifier = Modifier.weight(1f))
-                Pill(if (on) "开" else "关", on, { vm.saveSetting(key, if (on) "false" else "true") })
-            }
-        }
-
-        // ---------- 外观 ----------
-        SectionTitle("外观")
-        SettingRow("主题") {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Pill("深色", vm.darkTheme, { vm.saveSetting("theme", "dark") })
-                Pill("浅色", !vm.darkTheme, { vm.saveSetting("theme", "light") })
-            }
+            // .switch-row：真开关滑块，不是"开/关"文字胶囊
+            Style.SwitchRow(
+                label = label,
+                checked = vm.settings[key] == "true",
+                onCheckedChange = { vm.saveSetting(key, if (it) "true" else "false") },
+            )
         }
 
         // ---------- 调试 ----------
         SectionTitle("调试")
         Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("调试服务器", color = c.fg, fontSize = 12.5.sp, modifier = Modifier.weight(1f))
-            val on = vm.settings["debug_server"] == "true"
-            Pill(if (on) "开" else "关", on, { vm.saveSetting("debug_server", if (on) "false" else "true") })
+            Style.Switch(
+                checked = vm.settings["debug_server"] == "true",
+                onCheckedChange = { vm.saveSetting("debug_server", if (it) "true" else "false") },
+            )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 6.dp)) {
-            AppButton(if (showDebug) "收起日志" else "查看日志", { showDebug = !showDebug }, fontSize = 11)
-            if (showDebug) AppButton("清空", { vm.clearDebugLogs() }, kind = ButtonKind.Danger, fontSize = 11)
+            Style.Button(if (showDebug) "收起日志" else "查看日志", { showDebug = !showDebug }, fontSize = 11.sp)
+            if (showDebug) Style.Button("清空", { vm.clearDebugLogs() }, kind = Style.Kind.Danger, fontSize = 11.sp)
         }
 
         AnimatedVisibility(
@@ -205,6 +237,41 @@ fun SettingsScreen(vm: AppViewModel, onRequestAllFilesAccess: () -> Unit = {}) {
                     lineHeight = 13.sp,
                     modifier = Modifier.verticalScroll(rememberScrollState()),
                 )
+            }
+        }
+
+        // ---------- 崩溃日志（原版 h2 崩溃日志 + 查看崩溃日志 按钮）----------
+        Style.H2("崩溃日志")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            Style.Button("查看崩溃日志", {
+                showCrash = !showCrash
+                if (showCrash) vm.loadCrashLogs()
+            }, fontSize = 12.sp)
+            if (showCrash && vm.crashLogs.isNotEmpty()) {
+                Style.Button("清空", { vm.clearCrashLogs() }, kind = Style.Kind.Danger, fontSize = 12.sp)
+            }
+        }
+        if (showCrash) {
+            Spacer(Modifier.height(8.dp))
+            if (vm.crashLogs.isEmpty()) {
+                Text("暂无崩溃日志", color = c.fgDim, fontSize = 12.sp, modifier = Modifier.padding(vertical = 8.dp))
+            } else {
+                vm.crashLogs.forEach { (name, size, mtime) ->
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = 3.dp)
+                            .clip(RoundedCornerShape(8.dp)).background(c.cardBg)
+                            .border(1.dp, c.cardBorder, RoundedCornerShape(8.dp))
+                            .padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(name, color = c.fg, fontSize = 11.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text("${size / 1024} KB · ${java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date(mtime))}",
+                                color = c.fgDim, fontSize = 10.sp)
+                        }
+                        Style.Button("删除", { vm.deleteCrashLog(name) }, kind = Style.Kind.Ghost, fontSize = 11.sp)
+                    }
+                }
             }
         }
 
@@ -251,64 +318,109 @@ private fun PatternRow(vm: AppViewModel, label: String, key: String, default: St
 @Composable
 fun HelpScreen(vm: AppViewModel) {
     val c = AppTheme.colors
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = Dimens.screenPadding),
-    ) {
-        Text("使用说明", color = c.fgBright, fontSize = 18.sp, fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(top = 14.dp, bottom = 12.dp))
+    // 原版帮助页：h2 分区 + 逐行 p，无卡片包裹
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).page()) {
+        Style.H1("使用说明")
 
-        HelpBlock(
-            "快速开始",
-            listOf(
-                "1. 左侧「新建下载」粘贴视频链接或 BV 号，点解析",
-                "2. 选择分P、清晰度、下载内容后点「开始下载」",
-                "3. 在任务列表查看进度，完成后到输出目录取文件",
-            ),
-        )
-        HelpBlock(
-            "搜索与批量下载",
-            listOf(
-                "「搜索」页可搜 UP 主或视频，点卡片直接进入下载",
-                "UP 主投稿列表支持分页浏览，点任一视频即可下载",
-                "新建下载支持空格分隔多个链接批量解析",
-            ),
-        )
-        HelpBlock(
-            "登录说明",
-            listOf(
-                "网页版登录态会过期（约一个月），到「账号」页重新扫码",
-                "TV 版登录更持久，但部分功能仍依赖网页版",
-                "登录失效时接口会明确报错，不会假装成功",
-            ),
-        )
-        HelpBlock(
-            "常见问题",
-            listOf(
-                "「无可用音视频流」：多为登录失效或该视频需要大会员",
-                "「账号未登录(code=-101)」：网页版登录已过期，重新扫码",
-                "下载中断：任务支持断点续传，重试会从断点继续",
-                "混流卡住：内置超时机制，超时会自动终止并保留原文件",
-            ),
-        )
+        HelpSection("支持的链接", listOf(
+            "· 视频: https://www.bilibili.com/video/BV1xxx 或 https://b23.tv/xxx 短链",
+            "· 番剧: https://www.bilibili.com/bangumi/play/epxxx(/ssxxx) 或 /bangumi/media/mdxxx",
+            "· 课程: https://www.bilibili.com/cheese/play/epxxx(/ssxxx)",
+            "· 纯ID: BV1xxx, av12345, ep12345, ss1234, md12345",
+        ))
+        HelpSection("下载模式", listOf(
+            "· 完整下载: 视频+音频合并+字幕+封面+弹幕",
+            "· 仅视频: 视频+音频合并(不含字幕/弹幕等附加)",
+            "· 仅音频: 只下载音频流(m4a)",
+            "· 仅字幕: 下载字幕文件(srt)",
+            "· 仅封面: 下载封面图片",
+            "· 仅弹幕: 下载弹幕文件(xml)",
+        ))
+        HelpSection("批量下载", listOf(
+            "· 在输入框中用空格分割多个链接",
+            "· 例: BV1xxx BV2yyy BV3zzz",
+            "· 解析后会显示所有视频，一键批量下载",
+        ))
+        HelpSection("登录授权", listOf(
+            "· 点击左侧「账号」图标进入登录页",
+            "· 网页版登录: 使用哔哩哔哩APP扫码，可下载大会员内容",
+            "· TV版授权: 使用TV版二维码授权，获取TV端access_token",
+            "· 两种登录可同时使用，互不影响",
+        ))
+        HelpSection("API类型", listOf(
+            "· 在设置中切换API类型: WEB / TV / APP / 国际版",
+            "· 不同API类型可能获取不同的下载地址和清晰度",
+            "· 遇到下载失败时可尝试切换API类型",
+        ))
+        HelpSection("搜索", listOf(
+            "· 点击左侧「搜索」图标",
+            "· 需先登录B站账号",
+            "· 切换「UP主」或「视频」搜索类型",
+            "· 搜索UP主可查看投稿视频列表",
+            "· 搜索视频可直接点击下载",
+        ))
+        HelpSection("收藏夹下载", listOf(
+            "· 登录后在账号页查看收藏夹列表",
+            "· 点击收藏夹查看视频",
+            "· 勾选视频后一键批量下载",
+        ))
+        HelpSection("关注列表", listOf(
+            "· 登录后在账号页查看已关注的UP主",
+            "· 点击UP主查看其投稿视频",
+            "· 可直接下载投稿视频",
+        ))
+        HelpSection("合集下载", listOf(
+            "· 解析视频时自动检测是否属于合集",
+            "· 检测到合集后显示「下载整个合集」按钮",
+            "· 合集内容会下载到以合集名命名的子文件夹",
+        ))
+        HelpSection("任务管理", listOf(
+            "· 左右滑动任务卡进入管理模式",
+            "· 管理模式下再次滑动任务，自动选中两次滑动之间的所有任务",
+            "· 点击任务可单独切换选中，全选按钮可一键选择",
+            "· 支持批量暂停、继续/重试、删除",
+            "· 支持按状态筛选: 全部 / 进行中 / 已完成 / 失败",
+        ))
+        HelpSection("日志管理", listOf(
+            "· 设置中点击「查看调试日志」查看运行日志",
+            "· 设置中点击「查看崩溃日志」查看闪退记录",
+            "· 崩溃日志支持单个分享和删除",
+            "· 遇到问题时可分享日志文件便于排查",
+        ))
+        HelpSection("存储说明", listOf(
+            "· 默认下载到应用私有目录(Movies/BBDown)",
+            "· 在设置中可自定义输出目录",
+            "· 如需保存到公共目录，需授予「所有文件访问权限」",
+            "· 支持自定义文件命名模板，四种类型独立设置",
+        ))
+        HelpSection("其他设置", listOf(
+            "· 主题: 深色 / 浅色 / 跟随系统",
+            "· 下载线程数: 默认8线程,可调4/16",
+            "· 视频编码: 自动下载时同清晰度按「编码优先级」选择,默认 AVC,可切换 HEVC / AV1",
+            "· 音频: 默认 M4A;Hi-Res FLAC 可在下载页「音频流」中选择",
+            "· 批量清晰度: 自动(每视频独立取最高)或固定清晰度(缺失自动回退)",
+            "· 可跳过字幕、封面、AI字幕、混流等步骤",
+        ))
         Spacer(Modifier.height(24.dp))
     }
 }
 
+/** 帮助页分区：h2 标题 + 逐行 p（原版结构，无卡片） */
 @Composable
-private fun HelpBlock(title: String, lines: List<String>) {
+private fun HelpSection(title: String, lines: List<String>) {
     val c = AppTheme.colors
-    Column(
-        Modifier.fillMaxWidth().padding(vertical = 6.dp)
-            .clip(RoundedCornerShape(Dimens.radiusLg))
-            .background(c.cardBg)
-            .border(1.dp, c.cardBorder, RoundedCornerShape(Dimens.radiusLg))
-            .padding(12.dp),
-    ) {
-        Text(title, color = c.accent, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold)
-        Spacer(Modifier.height(6.dp))
-        lines.forEach {
-            Text(it, color = c.fg, fontSize = 11.5.sp, lineHeight = 17.sp,
-                modifier = Modifier.padding(vertical = 2.dp))
+    Column {
+        Style.H2(title)
+        lines.forEach { line ->
+            Text(line, color = c.fg, fontSize = 13.sp, lineHeight = 20.sp,
+                modifier = Modifier.padding(bottom = 6.dp))
         }
     }
+}
+/** `label.field-label{ font-size:11.5px; color:var(--fg-title); margin-bottom:5px; font-weight:500 }` */
+@Composable
+private fun FieldLabel(text: String) {
+    val c = AppTheme.colors
+    Text(text, color = c.fgTitle, fontSize = 11.5.sp, fontWeight = FontWeight.Medium,
+        modifier = Modifier.padding(bottom = 5.dp))
 }

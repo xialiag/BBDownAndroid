@@ -43,8 +43,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.bbdown.app.ui.AppViewModel
-import com.bbdown.app.ui.components.AppButton
-import com.bbdown.app.ui.components.ButtonKind
 import com.bbdown.app.ui.components.ErrorRow
 import com.bbdown.app.ui.components.LoadingRow
 import com.bbdown.app.ui.components.Pill
@@ -52,6 +50,8 @@ import com.bbdown.app.ui.components.PressableBox
 import com.bbdown.app.ui.components.SectionTitle
 import com.bbdown.app.ui.components.SmoothProgressBar
 import com.bbdown.app.ui.components.StaggeredItem
+import com.bbdown.app.ui.style.Style
+import com.bbdown.app.ui.style.page
 import com.bbdown.app.ui.theme.AppTheme
 import com.bbdown.app.ui.theme.Dimens
 
@@ -81,12 +81,11 @@ fun AddTaskScreen(vm: AppViewModel) {
     var advanced by remember { mutableStateOf(false) }
 
     Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = Dimens.screenPadding),
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).page(),
     ) {
-        Text("新建下载任务", color = c.fgBright, fontSize = 18.sp, fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(top = 14.dp))
-        Text("输入B站视频链接，支持批量(空格分隔)", color = c.fgDim, fontSize = 11.5.sp,
-            modifier = Modifier.padding(top = 3.dp, bottom = 12.dp))
+        Style.H1("新建下载任务")
+        Text("输入B站视频链接，支持批量(空格分隔)", color = c.fgDim, fontSize = 13.sp,
+            modifier = Modifier.padding(bottom = 8.dp))
 
         // 输入行
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -114,10 +113,10 @@ fun AddTaskScreen(vm: AppViewModel) {
                 )
             }
             Spacer(Modifier.width(8.dp))
-            AppButton(
+            Style.Button(
                 if (vm.addTaskLoading) "解析中" else "解析",
                 onClick = { vm.parseAndLoad(keyword) },
-                kind = ButtonKind.Primary,
+                kind = Style.Kind.Primary,
                 enabled = !vm.addTaskLoading && keyword.isNotBlank(),
             )
         }
@@ -175,8 +174,8 @@ fun AddTaskScreen(vm: AppViewModel) {
                     if (info.pages.size > 1) {
                         SectionTitle("分P (${vm.selectedPages.size}/${info.pages.size})")
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            AppButton("全选", { vm.selectAllPages(true, info.pages.map { it.index }) }, fontSize = 11)
-                            AppButton("取消全选", { vm.selectAllPages(false, emptyList()) }, fontSize = 11)
+                            Style.Button("全选", { vm.selectAllPages(true, info.pages.map { it.index }) }, fontSize = 11.sp)
+                            Style.Button("取消全选", { vm.selectAllPages(false, emptyList()) }, fontSize = 11.sp)
                         }
                         Spacer(Modifier.height(6.dp))
                         info.pages.forEach { p ->
@@ -300,12 +299,12 @@ fun AddTaskScreen(vm: AppViewModel) {
                     }
 
                     Spacer(Modifier.height(16.dp))
-                    AppButton(
+                    Style.Button(
                         "开始下载",
                         { vm.submitDownload() },
-                        kind = ButtonKind.Primary,
+                        kind = Style.Kind.Primary,
                         modifier = Modifier.fillMaxWidth(),
-                        fontSize = 14,
+                        fontSize = 14.sp,
                     )
                     Spacer(Modifier.height(24.dp))
                 }
