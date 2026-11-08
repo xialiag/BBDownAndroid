@@ -400,22 +400,30 @@ private fun StatusBar(vm: AppViewModel) {
             .height(Spec.Layout.statusbarHeight)
             .background(c.bgStatusbar)
             .navigationBarsPadding()
+            // CSS #statusbar{ padding:0 10px; gap:14px; font-size:11.5px }
+            //            .sb-right{ margin-left:auto; opacity:.85 }
             .padding(horizontal = Spec.Layout.statusbarPadH),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Spec.Layout.statusbarGap),
     ) {
-        // 登录状态点：未登录=半透明白，已登录=实心
-        Box(
-            Modifier.size(5.dp).clip(CircleShape)
-                .background(Color.White.copy(alpha = if (vm.webLogin || vm.tvLogin) 1f else 0.45f))
-        )
-        Spacer(Modifier.width(5.dp))
-        Text(
-            vm.userName.ifEmpty { if (vm.webLogin || vm.tvLogin) "已登录" else "未登录" },
-            color = Color.White, fontSize = 10.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-        )
-        Spacer(Modifier.weight(1f))
-        Text("$running 运行中 · $done 已完成", color = Color.White, fontSize = Spec.Layout.statusbarFontSize)
-        Spacer(Modifier.weight(1f))
-        Text("BBDown Android v${com.bbdown.app.BuildConfig.VERSION_NAME}", color = Color.White.copy(alpha = 0.85f), fontSize = Spec.Layout.statusbarFontSize)
+        // .sb-item{ display:flex; align-items:center; gap:5px }
+        Row(verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            Box(
+                Modifier.size(5.dp).clip(CircleShape)
+                    .background(Color.White.copy(alpha = if (vm.webLogin || vm.tvLogin) 1f else 0.45f))
+            )
+            Text(
+                vm.userName.ifEmpty { if (vm.webLogin || vm.tvLogin) "已登录" else "未登录" },
+                color = Color.White, fontSize = Spec.Layout.statusbarFontSize,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Text("$running 运行中 · $done 已完成", color = Color.White,
+            fontSize = Spec.Layout.statusbarFontSize, maxLines = 1)
+        Text("BBDown Android v${com.bbdown.app.BuildConfig.VERSION_NAME}",
+            color = Color.White.copy(alpha = 0.85f), fontSize = Spec.Layout.statusbarFontSize,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false))
     }
 }

@@ -289,7 +289,10 @@ private fun extractBv(url: String): String {
 private fun EmptyHero() {
     val c = AppTheme.colors
     Column(
-        Modifier.fillMaxWidth().padding(horizontal = Spec.WelcomeHero.padH, vertical = Spec.WelcomeHero.padTop),
+        Modifier.fillMaxWidth().padding(
+            start = Spec.WelcomeHero.padH, end = Spec.WelcomeHero.padH,
+            top = Spec.WelcomeHero.padTop, bottom = Spec.WelcomeHero.padBottom,
+        ),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         // 原版内联 SVG：viewBox 0 0 24 24
