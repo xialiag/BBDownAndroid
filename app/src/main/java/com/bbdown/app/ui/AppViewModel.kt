@@ -953,6 +953,34 @@ class AppViewModel : ViewModel() {
         }
     }
 
+    // ==================== API 类型 / 缓存管理 ====================
+
+    /** 当前 API 类型：web / tv / app / intl（原版 _apiType） */
+    var apiType by mutableStateOf("web")
+
+    fun loadApiType() = viewModelScope.launch {
+        apiType = runCatching { withContext(Dispatchers.IO) { bridgeGetApiType() } }.getOrDefault("web")
+    }
+
+    fun changeApiType(type: String) {
+        apiType = type
+        viewModelScope.launch(Dispatchers.IO) { runCatching { bridgeSetApiType(type) } }
+        toast("API 类型已切换为 ${type.uppercase()}")
+    }
+
+    /** 缓存大小（cache / logs 字节数） */
+    var cacheSizes by mutableStateOf<Map<String, Long>>(emptyMap())
+
+    fun loadCacheSizes() = viewModelScope.launch {
+        cacheSizes = runCatching { withContext(Dispatchers.IO) { bridgeGetCacheSizes() } }.getOrDefault(emptyMap())
+    }
+
+    fun clearCache(type: String) = viewModelScope.launch {
+        withContext(Dispatchers.IO) { runCatching { bridgeClearCache(type) } }
+        loadCacheSizes()
+        toast("已清理${if (type == "logs") "日志" else "缓存"}")
+    }
+
     // ==================== 诊断 ====================
 
     fun loadDebugLogs() = viewModelScope.launch {

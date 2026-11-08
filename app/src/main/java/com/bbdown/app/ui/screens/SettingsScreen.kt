@@ -75,9 +75,11 @@ fun SettingsScreen(
     val c = AppTheme.colors
     var showDebug by remember { mutableStateOf(false) }
     var showCrash by remember { mutableStateOf(false) }
+    var showCache by remember { mutableStateOf(false) }
     // 原版 input value="${s.output_dir||''}" —— 预填实际路径
     var outDirDraft by remember { mutableStateOf(vm.settings["output_dir"] ?: "") }
 
+    LaunchedEffect(Unit) { vm.loadApiType() }
     LaunchedEffect(showDebug) {
         if (showDebug) vm.loadDebugLogs()
     }
@@ -208,6 +210,30 @@ fun SettingsScreen(
             selected = when (vm.settings["preferCodec"]) { "hevc" -> 1; "av1" -> 2; else -> 0 },
             onSelect = { vm.saveSetting("preferCodec", listOf("avc", "hevc", "av1")[it]) },
         )
+
+        // ---------- API 类型（原版 pill-group：WEB/TV/APP/国际版）----------
+        FieldLabel("API 类型")
+        Style.SegmentedTabs(
+            options = listOf("WEB", "TV", "APP", "国际版"),
+            selected = when (vm.apiType) { "tv" -> 1; "app" -> 2; "intl" -> 3; else -> 0 },
+            onSelect = { vm.changeApiType(listOf("web", "tv", "app", "intl")[it]) },
+        )
+        Text("选择解析/下载使用的API类型", color = c.fgDim, fontSize = 10.sp,
+            modifier = Modifier.padding(bottom = 12.dp))
+
+        // ---------- 缓存管理（原版 showCacheManage + 缓存管理按钮）----------
+        Style.H2("存储")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            Style.Button("缓存管理", { vm.loadCacheSizes(); showCache = true }, fontSize = 12.sp)
+            if (showCache) Style.Button("清理缓存", { vm.clearCache("cache") }, kind = Style.Kind.Danger, fontSize = 12.sp)
+        }
+        if (showCache) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "图片缓存：${fmtBytes(vm.cacheSizes["cache"] ?: 0L)}   日志：${fmtBytes(vm.cacheSizes["logs"] ?: 0L)}",
+                color = c.fgDim, fontSize = 11.sp,
+            )
+        }
 
         // ---------- 文件名模板 ----------
         SectionTitle("文件名模板")
