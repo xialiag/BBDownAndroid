@@ -333,6 +333,17 @@ fun AddTaskScreen(vm: AppViewModel) {
             vm.batchErrors.forEach { e ->
                 Text("✗ $e", color = c.error, fontSize = 11.sp, modifier = Modifier.padding(vertical = 2.dp))
             }
+            Spacer(Modifier.height(14.dp))
+            // 原版「批量下载全部」按钮（renderBatchFlow 的 btnAction）
+            if (vm.batchResults.isNotEmpty()) {
+                Style.Button(
+                    "批量下载全部",
+                    { vm.submitBatchDownload() },
+                    kind = Style.Kind.Primary,
+                    fill = true,
+                    fontSize = 14.sp,
+                )
+            }
             Spacer(Modifier.height(16.dp))
         }
 

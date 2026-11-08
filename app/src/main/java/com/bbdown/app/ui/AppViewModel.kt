@@ -380,6 +380,57 @@ class AppViewModel : ViewModel() {
         parseAndLoad(bvid)
     }
 
+    /** 批量下载：为每个解析成功的视频创建任务（原版 doBatchDownload） */
+    fun submitBatchDownload() = viewModelScope.launch {
+        val items = batchResults
+        if (items.isEmpty()) { toast("没有可下载的视频", true); return@launch }
+        var ok = 0
+        var fail = 0
+        withContext(Dispatchers.IO) {
+            for (item in items) {
+                try {
+                    val resolved = bridgeResolveVideo(item.bvid.ifEmpty { item.title })
+                    val info = resolved.info
+                    if (info.pages.isEmpty()) { fail++; continue }
+                    val task = DownloadTask(
+                        taskId = "${System.currentTimeMillis()}_$ok",
+                        url = resolved.url,
+                        title = info.title,
+                        pic = info.pic,
+                        pages = info.pages,
+                        videoId = "",
+                        preferCodec = settings["preferCodec"] ?: "avc",
+                        preferAudio = settings["preferAudio"] ?: "m4a",
+                        cookie = bridgeCookie(),
+                        downloadMode = settings["downloadMode"] ?: "all",
+                        downloadDanmaku = settings["downloadDanmaku"] == "true",
+                        skipMux = settings["skipMux"] == "true",
+                        skipSubtitle = settings["skipSubtitle"] == "true",
+                        skipCover = settings["skipCover"] == "true",
+                        skipAi = settings["skipAi"] != "false",
+                        videoAscending = settings["videoAscending"] == "true",
+                        audioAscending = settings["audioAscending"] == "true",
+                        filePattern = resolveFilePattern(info.pages.size > 1),
+                        forceHttp = settings["forceHttp"] == "true",
+                        isCheese = info.isCheese,
+                        upperName = info.upperName,
+                        desc = info.desc,
+                        pubTime = info.pubTime,
+                        bvid = info.bvid,
+                        ownerMid = info.ownerMid,
+                    )
+                    TaskManager.add(task)
+                    ok++
+                } catch (_: Exception) { fail++ }
+            }
+        }
+        toast("已加入 $ok 个任务${if (fail > 0) "，$fail 个失败" else ""}")
+        batchResults = emptyList()
+        batchErrors = emptyList()
+        addTaskInput = ""
+        navigate(View.Explorer)
+    }
+
     fun togglePage(index: Int) {
         if (selectedPages.contains(index)) selectedPages.remove(index) else selectedPages.add(index)
     }
