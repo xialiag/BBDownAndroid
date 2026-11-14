@@ -185,12 +185,32 @@ class MultiThreadDownloader(
         return segs
     }
 
-    /** 加载断点续传配置，URL 不匹配则返回 null */
+    /**
+     * 判断两个直链是否指向同一资源（用于断点续传命中）。
+     *
+     * B站 CDN 直链带 `deadline` / `upsig` / `uipk` 等签名参数，每次解析都会变化，
+     * 主机名也可能换成另一个 CDN 节点 —— 原来的「URL 全等」判定导致断点几乎永不命中，
+     * 失败/取消/重启后总是从头下载。这里退化为「路径 + 总长度」判定：
+     * 路径里的文件名已包含流标识（如 `567890-1-30032.m4s`），足以区分清晰度与编码。
+     */
+    private fun sameResource(oldUrl: String, newUrl: String): Boolean {
+        if (oldUrl == newUrl) return true
+        if (oldUrl.isEmpty() || newUrl.isEmpty()) return false
+        return try {
+            val a = java.net.URL(oldUrl)
+            val b = java.net.URL(newUrl)
+            a.path == b.path
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** 加载断点续传配置，资源不匹配则返回 null */
     private fun loadResumeConfig(cfgFile: File, url: String, total: Long): List<Segment>? {
         if (!cfgFile.exists()) return null
         try {
             val json = JSONObject(cfgFile.readText())
-            if (json.optString("url") != url) return null
+            if (!sameResource(json.optString("url"), url)) return null
             if (json.optLong("total") != total) return null
             val arr = json.optJSONArray("parts") ?: return null
             val segs = ArrayList<Segment>()

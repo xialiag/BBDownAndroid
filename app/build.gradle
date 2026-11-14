@@ -41,8 +41,8 @@ android {
         applicationId "com.bbdown.app"
         minSdk 24
         targetSdk 33
-        versionCode 200
-        versionName "2.1.0-compose"
+        versionCode 201
+        versionName "2.0.19"
         vectorDrawables.useSupportLibrary = true
         ndk {
             abiFilters 'arm64-v8a'
@@ -72,14 +72,6 @@ android {
     kotlinOptions {
         jvmTarget = '11'
     }
-    buildFeatures {
-        compose true
-        buildConfig true
-    }
-    composeOptions {
-        // Kotlin 1.8.22 唯一匹配的 Compose 编译器版本
-        kotlinCompilerExtensionVersion '1.4.8'
-    }
     sourceSets {
         main {
             assets.srcDirs = ['src/main/assets']
@@ -90,20 +82,6 @@ android {
 dependencies {
     implementation 'androidx.core:core-ktx:1.9.0'
     implementation 'androidx.appcompat:appcompat:1.6.1'
-    // ==================== Jetpack Compose ====================
-    implementation platform('androidx.compose:compose-bom:2023.05.01')
-    implementation 'androidx.compose.ui:ui'
-    implementation 'androidx.compose.ui:ui-graphics'
-    implementation 'androidx.compose.ui:ui-tooling-preview'
-    implementation 'androidx.compose.foundation:foundation'
-    implementation 'androidx.compose.material3:material3'
-    implementation 'androidx.compose.material:material-icons-core'
-    implementation 'androidx.activity:activity-compose:1.7.2'
-    implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.6.1'
-    implementation 'androidx.lifecycle:lifecycle-runtime-compose:2.6.1'
-    // 图片加载（视频封面/头像）：Coil Compose
-    implementation 'io.coil-kt:coil-compose:2.4.0'
-    debugImplementation 'androidx.compose.ui:ui-tooling'
     implementation 'com.google.android.material:material:1.8.0'
     implementation 'androidx.webkit:webkit:1.6.1'
     implementation 'com.google.zxing:core:3.5.2'

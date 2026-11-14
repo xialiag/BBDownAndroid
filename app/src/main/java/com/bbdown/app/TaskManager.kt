@@ -405,9 +405,78 @@ object TaskManager {
     }
 
     fun remove(id: String) {
+        val t = tasks[id]
         cancel(id)
         tasks.remove(id)
+        if (t != null) purgeTempFiles(t)
         try { TaskStore.save() } catch (_: Exception) {}
+    }
+
+    /** 删除任务时一并清掉它的断点/临时文件（.dl / .vpart / .apart / .meta.*）
+     *
+     * 之前只移除任务记录，临时文件留在输出目录里无人回收 —— 缓存管理页实测堆积 200+ 个。
+     * 这里按任务已产出的文件名反推（DownloadEngine 的临时文件都是「目标文件名 + 后缀」），
+     * 找不到对应输出文件时交给启动时的孤儿清理兜底。 */
+    private fun purgeTempFiles(t: DownloadTask) {
+        try {
+            val dir = if (t.outputFiles.isNotEmpty()) {
+                java.io.File(t.outputFiles[0]).parentFile ?: TaskManager.outputDir
+            } else TaskManager.outputDir
+            if (!dir.exists()) return
+            val stems = t.outputFiles.map { java.io.File(it).name }
+            dir.listFiles()?.forEach { f ->
+                if (!f.isFile) return@forEach
+                val name = f.name
+                val isTemp = name.endsWith(".dl") || name.endsWith(".vpart") ||
+                    name.endsWith(".apart") || name.contains(".meta.")
+                if (!isTemp) return@forEach
+                // 精确匹配「输出文件名去扩展名 + 临时后缀」，
+                // 不能用 startsWith(前缀)：同一合集里「第1集」「第10集」会互相误删
+                val hit = stems.any { stem ->
+                    val base = stem.substringBeforeLast('.')
+                    name == "$base.dl" || name == "$base.vpart" || name == "$base.apart" ||
+                        name.startsWith("$base.meta.")
+                }
+                if (hit) {
+                    Logger.i("TaskManager", "清理临时文件: ${name}")
+                    f.delete()
+                }
+            }
+        } catch (e: Exception) {
+            Logger.w("TaskManager", "清理临时文件失败: ${e.message}")
+        }
+    }
+
+    /** 启动时清理孤儿临时文件：输出目录里超过 7 天且不属于任何当前任务的 .dl/.vpart/.apart
+     *  （用户删除任务、重装、或崩溃后残留的断点文件），避免缓存无限增长。 */
+    fun purgeOrphanTempFiles() {
+        try {
+            val dir = TaskManager.outputDir
+            if (!dir.exists()) return
+            val cutoff = System.currentTimeMillis() - 7L * 24 * 3600 * 1000
+            val stems = tasks.values.flatMap { t ->
+                t.outputFiles.map { java.io.File(it).name.substringBeforeLast('.') }
+            }
+            var n = 0
+            var freed = 0L
+            dir.listFiles()?.forEach { f ->
+                if (!f.isFile) return@forEach
+                val name = f.name
+                val isTemp = name.endsWith(".dl") || name.endsWith(".vpart") ||
+                    name.endsWith(".apart") || name.contains(".meta.")
+                if (!isTemp || f.lastModified() > cutoff) return@forEach
+                // 精确匹配当前任务的临时文件（同上，避免前缀误判）
+                if (stems.any { base ->
+                        name == "$base.dl" || name == "$base.vpart" || name == "$base.apart" ||
+                            name.startsWith("$base.meta.")
+                    }) return@forEach
+                freed += f.length()
+                if (f.delete()) n++
+            }
+            if (n > 0) Logger.i("TaskManager", "清理孤儿临时文件 $n 个，释放 ${freed / 1024}KB")
+        } catch (e: Exception) {
+            Logger.w("TaskManager", "孤儿清理失败: ${e.message}")
+        }
     }
 
     fun clearFinished() {
